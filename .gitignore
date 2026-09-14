@@ -18,8 +18,8 @@ src-tauri/target/
 *.rpm
 *.msi
 
-# Chat conversation logs
-chats/
+# Custom agent data (uploads, memory, schedules)
+custom_agents/
 venv/
 ada-observability/
 jarvis-observability/
@@ -42,6 +42,9 @@ npm-debug.log*
 *.swo
 .DS_Store
 Thumbs.db
+
+# Local Hugging Face / llama.cpp weights (downloaded at runtime)
+models/
 
 # Env and secrets
 .env

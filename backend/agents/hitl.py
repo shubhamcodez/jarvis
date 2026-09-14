@@ -68,8 +68,14 @@ def classify_shell_command(command: str) -> str:
 
 
 def needs_approval(risk: str, autonomy: Optional[str] = None) -> bool:
+    from agents.execution_policy import force_hitl, mode_label
+
+    if mode_label() == "plan":
+        return True
     level = (autonomy or get_autonomy_level()).strip().lower()
     r = (risk or "read").strip().lower()
+    if force_hitl("write") and r in ("write", "high_impact"):
+        return True
     if level in ("recommend", "draft"):
         return r in ("write", "high_impact")
     if level == "low_risk_auto":
@@ -158,6 +164,11 @@ def maybe_gate_google(
     chat_id: Optional[str] = None,
     execute: Callable[[], Any],
 ) -> dict[str, Any]:
+    from agents.execution_policy import deny_if_blocked
+
+    blocked = deny_if_blocked("google_write" if classify_google_op(op) != "read" else "read")
+    if blocked and classify_google_op(op) != "read":
+        return blocked
     risk = classify_google_op(op)
     if not needs_approval(risk):
         return execute()
@@ -183,7 +194,23 @@ def maybe_gate_shell(
     chat_id: Optional[str] = None,
     execute: Callable[[], Any],
 ) -> dict[str, Any]:
+    from agents.execution_policy import deny_if_blocked
+    from agents.run_control import record_checkpoint
+
+    blocked = deny_if_blocked("shell")
+    if blocked:
+        return blocked
     risk = classify_shell_command(command)
+    if risk in ("write", "high_impact"):
+        try:
+            record_checkpoint(
+                None,
+                kind="shell",
+                summary=f"shell: {(command or '')[:120]}",
+                payload={"command": command},
+            )
+        except Exception:
+            pass
     if not needs_approval(risk):
         return execute()
     pending = enqueue_approval(
@@ -204,6 +231,11 @@ def maybe_gate_shell(
 
 def require_desktop_armed() -> Optional[str]:
     """Return an error message if GUI control is not armed."""
+    from agents.execution_policy import assert_allowed
+
+    blocked = assert_allowed("desktop")
+    if blocked:
+        return blocked
     if is_desktop_armed():
         return None
     return (

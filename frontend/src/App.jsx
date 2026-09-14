@@ -47,7 +47,31 @@ import {
   addBookmark,
   deleteBookmark,
   getUsageStats,
+  setRunMode,
+  setSpendLimits,
+  setQuietHours,
+  listTasks,
+  cancelTask,
+  listActiveRuns,
+  stopActiveRun,
+  steerActiveRun,
+  listCheckpoints,
+  restoreCheckpoint,
+  listFacts,
+  addFact,
+  deleteFact,
+  getIdentity,
+  saveIdentity,
+  getLocalModels,
+  getLocalModelJob,
+  downloadLocalModel,
+  loadLocalModel,
+  listCustomAgents,
+  createCustomAgent,
 } from './api'
+import { CustomAgentEditor } from './CustomAgentEditor'
+import { CreateAgentModal } from './CreateAgentModal'
+import { ControlPlane } from './ControlPlane'
 import {
   buildSnapshotFromDirectoryHandle,
   buildSnapshotFromFileList,
@@ -298,6 +322,17 @@ const NAV_NEW_CHAT_ICON = (
     <path d="M12 5v14M5 12h14" />
   </svg>
 )
+
+function nextAgentRunLabel(iso) {
+  if (!iso) return ''
+  try {
+    const d = new Date(iso)
+    if (Number.isNaN(d.getTime())) return ''
+    return d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
+  } catch {
+    return ''
+  }
+}
 
 /** Sidebar / footer folder mark (stroke, matches other UI icons). */
 const REPO_FOLDER_ICON = (
@@ -739,6 +774,9 @@ function App() {
   const [attachments, setAttachments] = useState([])
   const [storagePath, setStoragePath] = useState('')
   const [modelProvider, setModelProvider] = useState('openai')
+  const [localModelId, setLocalModelId] = useState('')
+  const [localModelsInfo, setLocalModelsInfo] = useState(null)
+  const [localJob, setLocalJob] = useState(null)
   const [googleAuth, setGoogleAuth] = useState({
     configured: false,
     connected: false,
@@ -806,6 +844,21 @@ function App() {
   const introduceWizardRef = useRef(null)
   const [pendingApprovals, setPendingApprovals] = useState([])
   const [autonomyLevel, setAutonomyLevelState] = useState('gated')
+  const [runMode, setRunModeState] = useState('agent')
+  const [spendLimits, setSpendLimitsState] = useState({ max_tokens_per_run: 80000, warn_tokens: 40000 })
+  const [quietHours, setQuietHoursState] = useState({
+    enabled: false,
+    start: '23:00',
+    end: '08:00',
+    timezone: 'local',
+  })
+  const [controlTasks, setControlTasks] = useState([])
+  const [activeRuns, setActiveRuns] = useState([])
+  const [liveUsage, setLiveUsage] = useState(null)
+  const [checkpoints, setCheckpoints] = useState([])
+  const [facts, setFacts] = useState([])
+  const [factDraft, setFactDraft] = useState('')
+  const [identity, setIdentity] = useState({ soul: '', user: '', memory: '' })
   const [desktopArmed, setDesktopArmedState] = useState(false)
   const [keysStatus, setKeysStatus] = useState({ openai_set: false, xai_set: false })
   const [openaiKeyDraft, setOpenaiKeyDraft] = useState('')
@@ -817,6 +870,12 @@ function App() {
   const [chatSearchHits, setChatSearchHits] = useState([])
   const [bookmarks, setBookmarks] = useState([])
   const [usageStats, setUsageStats] = useState(null)
+  const [customAgents, setCustomAgents] = useState([])
+  const [activeAgentId, setActiveAgentId] = useState(null)
+  const [agentEditorId, setAgentEditorId] = useState(null)
+  const [creatingAgent, setCreatingAgent] = useState(false)
+  const [createAgentOpen, setCreateAgentOpen] = useState(false)
+  const [createAgentError, setCreateAgentError] = useState('')
   const abortRef = useRef(null)
   const sendingRef = useRef(false)
   const messageQueueRef = useRef([])
@@ -1087,6 +1146,36 @@ function App() {
     }
   }, [])
 
+  const refreshCustomAgents = useCallback(async () => {
+    try {
+      const data = await listCustomAgents(true)
+      setCustomAgents(Array.isArray(data?.agents) ? data.agents : [])
+    } catch {
+      setCustomAgents([])
+    }
+  }, [])
+
+  const agentChatIds = useMemo(
+    () => new Set((customAgents || []).map((a) => a.chat_id).filter(Boolean)),
+    [customAgents],
+  )
+  const generalChats = useMemo(
+    () => (chats || []).filter((c) => !agentChatIds.has(c.id)),
+    [chats, agentChatIds],
+  )
+  const activeAgent = useMemo(
+    () => (customAgents || []).find((a) => a.id === activeAgentId) || null,
+    [customAgents, activeAgentId],
+  )
+  const visibleAgents = useMemo(
+    () => (customAgents || []).filter((a) => !a.hidden),
+    [customAgents],
+  )
+  const hiddenAgents = useMemo(
+    () => (customAgents || []).filter((a) => a.hidden),
+    [customAgents],
+  )
+
   const refreshStoragePath = useCallback(async () => {
     try {
       const path = await getChatsStoragePath()
@@ -1098,10 +1187,21 @@ function App() {
 
   const refreshModelSetting = useCallback(async () => {
     try {
-      const provider = await getModelSetting()
-      setModelProvider(provider || 'openai')
+      const data = await getModelSetting()
+      setModelProvider(data?.provider || 'openai')
+      setLocalModelId(data?.local_model_id || '')
     } catch {
       setModelProvider('openai')
+    }
+  }, [])
+
+  const refreshLocalModels = useCallback(async () => {
+    try {
+      const data = await getLocalModels()
+      setLocalModelsInfo(data)
+      if (data?.job) setLocalJob(data.job)
+    } catch {
+      setLocalModelsInfo(null)
     }
   }, [])
 
@@ -1142,6 +1242,9 @@ function App() {
     try {
       const rt = await getRuntimeSettings()
       if (rt?.autonomy) setAutonomyLevelState(rt.autonomy)
+      if (rt?.run_mode) setRunModeState(rt.run_mode)
+      if (rt?.spend) setSpendLimitsState(rt.spend)
+      if (rt?.quiet_hours) setQuietHoursState(rt.quiet_hours)
       setDesktopArmedState(!!rt?.desktop_armed)
       if (rt?.keys) setKeysStatus(rt.keys)
     } catch {
@@ -1161,6 +1264,41 @@ function App() {
       setBookmarks(Array.isArray(data?.bookmarks) ? data.bookmarks : [])
     } catch {
       setBookmarks([])
+    }
+  }, [])
+
+  const refreshControlPlane = useCallback(async () => {
+    try {
+      const data = await listTasks(null, true)
+      setControlTasks(Array.isArray(data?.tasks) ? data.tasks : [])
+    } catch {
+      setControlTasks([])
+    }
+    try {
+      const data = await listActiveRuns()
+      setActiveRuns(Array.isArray(data?.runs) ? data.runs : [])
+    } catch {
+      setActiveRuns([])
+    }
+    try {
+      const data = await listCheckpoints()
+      setCheckpoints(Array.isArray(data?.checkpoints) ? data.checkpoints : [])
+    } catch {
+      setCheckpoints([])
+    }
+  }, [])
+
+  const refreshMemoryExtras = useCallback(async () => {
+    try {
+      const data = await listFacts()
+      setFacts(Array.isArray(data?.facts) ? data.facts : [])
+    } catch {
+      setFacts([])
+    }
+    try {
+      setIdentity(await getIdentity())
+    } catch {
+      /* ignore */
     }
   }, [])
 
@@ -1186,7 +1324,10 @@ function App() {
     await refreshModelSetting()
     await refreshGoogleAuth()
     await refreshRuntime()
-  }, [refreshStoragePath, refreshModelSetting, refreshGoogleAuth, refreshRuntime])
+    await refreshLocalModels()
+    await refreshControlPlane()
+    await refreshMemoryExtras()
+  }, [refreshStoragePath, refreshModelSetting, refreshGoogleAuth, refreshRuntime, refreshLocalModels, refreshControlPlane, refreshMemoryExtras])
 
   const selectChat = useCallback(async (chatId) => {
     try {
@@ -1199,8 +1340,58 @@ function App() {
     }
   }, [])
 
+  const selectCustomAgent = useCallback(
+    async (agent) => {
+      if (!agent) return
+      setActiveAgentId(agent.id)
+      setPanel('chats')
+      if (agent.chat_id) {
+        await selectChat(agent.chat_id)
+      }
+    },
+    [selectChat],
+  )
+
+  const selectAda = useCallback(async () => {
+    setAgentEditorId(null)
+    setPanel('chats')
+    const owner = (customAgents || []).find((a) => a.chat_id && a.chat_id === currentChatId)
+    if (owner) {
+      try {
+        const chatId = await createNewChat()
+        setCurrentChatIdState(chatId)
+        setMessages([])
+        await refreshChatList()
+      } catch (e) {
+        console.error(e)
+      }
+    }
+  }, [customAgents, currentChatId, refreshChatList])
+
+  const handleCreateAgentFromBrief = useCallback(async (brief) => {
+    setCreatingAgent(true)
+    setCreateAgentError('')
+    try {
+      const created = await createCustomAgent({ brief })
+      await refreshCustomAgents()
+      setCreateAgentOpen(false)
+      setAgentEditorId(null)
+      setActiveAgentId(created.id)
+      setPanel('chats')
+      if (created.chat_id) await selectChat(created.chat_id)
+    } catch (e) {
+      setCreateAgentError(e?.message || 'Could not create agent.')
+    }
+    setCreatingAgent(false)
+  }, [refreshCustomAgents, selectChat])
+
+  useEffect(() => {
+    refreshLocalModels()
+  }, [refreshLocalModels])
+
   useEffect(() => {
     refreshChatList()
+    refreshCustomAgents()
     getCurrentChatId()
       .then((id) => {
         setCurrentChatIdState(id)
@@ -1209,11 +1400,48 @@ function App() {
       .catch(() => {
         setCurrentChatIdState(null)
       })
-  }, [refreshChatList, selectChat])
+  }, [refreshChatList, refreshCustomAgents, selectChat])
+
+  useEffect(() => {
+    const owner = (customAgents || []).find((a) => a.chat_id && a.chat_id === currentChatId)
+    setActiveAgentId(owner ? owner.id : null)
+  }, [currentChatId, customAgents])
+
+  useEffect(() => {
+    refreshControlPlane()
+    refreshMemoryExtras()
+  }, [refreshControlPlane, refreshMemoryExtras])
+
+  useEffect(() => {
+    if (!sending) return undefined
+    const t = setInterval(() => {
+      refreshControlPlane()
+    }, 2500)
+    return () => clearInterval(t)
+  }, [sending, refreshControlPlane])
 
   useEffect(() => {
     if (panel === 'settings') refreshSettings()
   }, [panel, refreshSettings])
+
+  useEffect(() => {
+    const busy = localJob?.status === 'downloading' || localJob?.status === 'loading'
+    if (panel !== 'settings' && !busy) return undefined
+    if (!busy) return undefined
+    const t = setInterval(async () => {
+      try {
+        const job = await getLocalModelJob()
+        setLocalJob(job)
+        if (job?.status === 'ready' || job?.status === 'error') {
+          refreshLocalModels()
+          refreshModelSetting()
+        }
+      } catch {
+        /* ignore */
+      }
+    }, 1000)
+    return () => clearInterval(t)
+  }, [panel, localJob?.status, refreshLocalModels, refreshModelSetting])
 
   useEffect(() => {
     refreshPendingApprovals()
@@ -1618,11 +1846,30 @@ function App() {
   }
 
   const handleModelChange = async (e) => {
-    const provider = e.target.value
-    if (provider !== 'openai' && provider !== 'xai') return
+    const value = e.target.value
     try {
-      await setModelSetting(provider)
-      setModelProvider(provider)
+      if (value === 'openai' || value === 'xai') {
+        await setModelSetting(value)
+        setModelProvider(value)
+        return
+      }
+      const mid = value.startsWith('local:') ? value.slice(6) : localModelId
+      if (!mid) return
+      const entry = (localModelsInfo?.catalog || []).find((m) => m.id === mid)
+      if (entry && !entry.installed) {
+        await downloadLocalModel(mid)
+        setLocalJob({ status: 'downloading', progress: 1, model_id: mid, message: 'Starting download…' })
+        setLocalModelId(mid)
+        setModelProvider('local')
+        return
+      }
+      if (entry && entry.installed && !entry.loaded) {
+        await loadLocalModel(mid)
+      }
+      await setModelSetting('local', mid)
+      setModelProvider('local')
+      setLocalModelId(mid)
+      refreshLocalModels()
     } catch (err) {
       alert(err?.message || 'Could not save model setting.')
     }
@@ -2094,6 +2341,7 @@ function App() {
           extraWs.trim() || null,
           projectContextActive,
           projectContextActive ? cSnap || null : null,
+          activeAgentId || null,
         )
         appendMessage(reply, false)
         await appendChatLog('assistant', reply)
@@ -2140,6 +2388,9 @@ function App() {
             webSearchQuery: extraWs.trim() || null,
             codingMode: projectContextActive,
             codingProjectSnapshot: projectContextActive ? cSnap || null : null,
+            customAgentId: activeAgentId || null,
+            resumeTaskId: opts.resumeTaskId || null,
+            onUsage: (u) => setLiveUsage(u),
             onChunk: (delta) => {
               streamAdaStripRef.current += delta
               setLiveReply(stripAdaFileFencesForDisplay(streamAdaStripRef.current))
@@ -2182,6 +2433,7 @@ function App() {
         }
         appendMessage(reply || '', false)
         await appendChatLog('assistant', reply || '')
+        refreshControlPlane()
       }
       setLiveReply(null)
       setStreamTimeline([])
@@ -2270,6 +2522,22 @@ function App() {
 
   const chatMainInner = (
     <>
+      {activeAgent ? (
+        <div className="agent-chat-banner">
+          <span className="agent-chat-banner__id">
+            <span aria-hidden>{activeAgent.emoji || '✦'}</span>
+            <strong>{activeAgent.name}</strong>
+            {activeAgent.title ? <span className="agent-chat-banner__title">{activeAgent.title}</span> : null}
+          </span>
+          <button
+            type="button"
+            className="agent-chat-banner__btn"
+            onClick={() => setAgentEditorId(activeAgent.id)}
+          >
+            Configure
+          </button>
+        </div>
+      ) : null}
       <div className="chat-messages">
         {messages.map((msg, i) => (
           <div key={i} className={`msg ${msg.role === 'user' ? 'msg-user' : msg.role === 'tool' ? 'msg-tool' : 'msg-bot'}`}>
@@ -2359,6 +2627,39 @@ function App() {
         )}
         <div ref={messagesEndRef} />
       </div>
+      <ControlPlane
+        runMode={runMode}
+        onRunMode={async (m) => {
+          try {
+            await setRunMode(m)
+            setRunModeState(m)
+          } catch (e) {
+            alert(e?.message || 'Could not change run mode.')
+          }
+        }}
+        liveUsage={liveUsage || { tokens_used: 0, max_tokens: spendLimits.max_tokens_per_run }}
+        tasks={controlTasks}
+        runs={activeRuns}
+        sending={sending}
+        onResumeTask={(t) => {
+          handleSend({
+            text: t.next_action || t.goal || 'Resume the paused task.',
+            resumeTaskId: t.id,
+          })
+        }}
+        onCancelTask={async (id) => {
+          await cancelTask(id)
+          refreshControlPlane()
+        }}
+        onStopRun={async (id) => {
+          await stopActiveRun(id)
+          abortRef.current?.abort()
+          refreshControlPlane()
+        }}
+        onSteer={async (id, note) => {
+          await steerActiveRun(id, note)
+        }}
+      />
       {pendingApprovals.length > 0 ? (
         <div className="hitl-stack" role="region" aria-label="Pending approvals">
           {pendingApprovals.map((p) => (
@@ -2563,6 +2864,8 @@ function App() {
               placeholder={
                 sending
                   ? 'Ada is working — Enter or Tab queues a follow-up'
+                  : activeAgent
+                    ? `Message ${activeAgent.name}…`
                   : codingModeEnabled && workspaceSnapshot.trim()
                     ? 'Message Ada… @file — Ctrl+click several, Enter to insert'
                     : webSearchMode
@@ -2624,6 +2927,7 @@ function App() {
             aria-label="New chat"
             onClick={async () => {
               try {
+                setAgentEditorId(null)
                 const chatId = await createNewChat()
                 setCurrentChatIdState(chatId)
                 setMessages([])
@@ -2695,10 +2999,10 @@ function App() {
                   {chatSearchQ.trim() && chatSearchHits.length === 0 ? (
                     <p className="navbar-chats-empty">No chats match that search.</p>
                   ) : null}
-                  {chatSearchQ.trim() ? null : chats.length === 0 ? (
+                  {chatSearchQ.trim() ? null : generalChats.length === 0 ? (
                     <p className="navbar-chats-empty">No conversations yet.</p>
                   ) : (
-                    chats.map((chat) => (
+                    generalChats.map((chat) => (
                       <div
                         key={chat.id}
                         className={`chat-history-item-wrap navbar-chats-item ${currentChatId === chat.id ? 'active' : ''}`}
@@ -2745,6 +3049,118 @@ function App() {
               </div>
             </div>
           </div>
+          <div className="navbar-chats-wrap">
+            <button
+              type="button"
+              className={`navbar-link${activeAgentId ? ' navbar-link--active' : ''}`}
+              onClick={() => setPanel('chats')}
+              aria-haspopup="true"
+            >
+              Agents
+            </button>
+            <div className="navbar-chats-dropdown" role="region" aria-label="Custom agents">
+              <div className="navbar-chats-dropdown-inner">
+                <div className="navbar-chats-dropdown-header navbar-agents-header">
+                  <span>Your agents</span>
+                  <button
+                    type="button"
+                    className="navbar-agents-plus"
+                    title="Create agent"
+                    aria-label="Create agent"
+                    onClick={() => {
+                      setCreateAgentError('')
+                      setCreateAgentOpen(true)
+                    }}
+                  >
+                    {NAV_NEW_CHAT_ICON}
+                  </button>
+                </div>
+                <div className="navbar-chats-list">
+                  <div className={`chat-history-item-wrap navbar-chats-item${!activeAgentId ? ' active' : ''}`}>
+                    <button
+                      type="button"
+                      className="chat-history-item"
+                      onClick={() => {
+                        selectAda()
+                        setPanel('chats')
+                      }}
+                    >
+                      <span className="navbar-agent-emoji" aria-hidden>
+                        A
+                      </span>
+                      <span className="chat-history-title">Ada</span>
+                    </button>
+                  </div>
+                  {visibleAgents.length === 0 ? (
+                    <p className="navbar-chats-empty">No custom agents yet. Use + to describe one.</p>
+                  ) : (
+                    visibleAgents.map((agent) => {
+                      const when = nextAgentRunLabel(agent.next_run_at)
+                      return (
+                        <div
+                          key={agent.id}
+                          className={`chat-history-item-wrap navbar-chats-item ${activeAgentId === agent.id ? 'active' : ''}`}
+                        >
+                          <button
+                            type="button"
+                            className="chat-history-item"
+                            onClick={() => {
+                              selectCustomAgent(agent)
+                              setPanel('chats')
+                            }}
+                          >
+                            <span className="navbar-agent-emoji" aria-hidden>
+                              {agent.emoji || '✦'}
+                            </span>
+                            <span className="chat-history-title" title={agent.title || agent.name}>
+                              {agent.pinned ? '📌 ' : ''}
+                              {agent.name}
+                              {when ? ` · ${when}` : ''}
+                            </span>
+                          </button>
+                          <button
+                            type="button"
+                            className="chat-history-delete"
+                            aria-label={`Configure ${agent.name}`}
+                            title="Configure"
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              setAgentEditorId(agent.id)
+                              selectCustomAgent(agent)
+                            }}
+                          >
+                            ⚙
+                          </button>
+                        </div>
+                      )
+                    })
+                  )}
+                  {hiddenAgents.length > 0
+                    ? hiddenAgents.map((agent) => (
+                        <div
+                          key={agent.id}
+                          className={`chat-history-item-wrap navbar-chats-item ${activeAgentId === agent.id ? 'active' : ''}`}
+                        >
+                          <button
+                            type="button"
+                            className="chat-history-item"
+                            onClick={() => {
+                              selectCustomAgent(agent)
+                              setPanel('chats')
+                            }}
+                          >
+                            <span className="navbar-agent-emoji" aria-hidden>
+                              {agent.emoji || '✦'}
+                            </span>
+                            <span className="chat-history-title">{agent.name} (hidden)</span>
+                          </button>
+                        </div>
+                      ))
+                    : null}
+                </div>
+              </div>
+            </div>
+          </div>
           <button
             type="button"
             className={`navbar-link${panel === 'activity' ? ' navbar-link--active' : ''}`}
@@ -2764,7 +3180,7 @@ function App() {
         </nav>
       </header>
       <div
-        className={`app-body${codingModeEnabled && panel === 'chats' ? ' app-body--coding-chats' : ''}`}
+        className={`app-body${codingModeEnabled && panel === 'chats' ? ' app-body--coding-chats' : ''}${agentEditorId ? ' app-body--agent-edit' : ''}`}
       >
         {codingModeEnabled ? (
         <>
@@ -3162,16 +3578,102 @@ function App() {
               </div>
               <div className="settings-section">
                 <label className="settings-label">Model</label>
-                <p className="settings-description">LLM used for chat and agents. Routing uses a smaller model.</p>
+                <p className="settings-description">
+                  Ada probes GPU, NPU, and RAM on this PC at launch (Windows, macOS, Linux) and picks a local model that fits. Cloud APIs stay optional.
+                </p>
                 <select
                   className="settings-model-select"
-                  value={modelProvider}
+                  value={modelProvider === 'local' && localModelId ? `local:${localModelId}` : modelProvider}
                   onChange={handleModelChange}
                   aria-label="Model provider"
                 >
                   <option value="openai">OpenAI (GPT)</option>
                   <option value="xai">xAI (Grok)</option>
+                  <optgroup label="Local (Hugging Face)">
+                    {(localModelsInfo?.catalog || []).map((m) => (
+                      <option key={m.id} value={`local:${m.id}`}>
+                        {m.name}
+                        {m.recommended ? ' — suggested' : ''}
+                        {m.installed ? ' ✓' : ''}
+                        {!m.fits ? ' (large for this machine)' : ''}
+                      </option>
+                    ))}
+                  </optgroup>
                 </select>
+                {localModelsInfo ? (
+                  <div className="settings-hw">
+                    <p className="settings-hw__summary">
+                      {localModelsInfo.hardware?.has_gpu ? 'GPU detected' : 'No dedicated GPU'}
+                      {localModelsInfo.hardware?.has_npu ? ' · NPU detected' : ''}
+                      {localModelsInfo.hardware?.system_ram_gb
+                        ? ` · ${localModelsInfo.hardware.system_ram_gb} GB RAM`
+                        : ''}
+                      {localModelsInfo.hardware?.usable_memory_gb
+                        ? ` · ~${localModelsInfo.hardware.usable_memory_gb} GB usable for weights`
+                        : ''}
+                    </p>
+                    <ul className="settings-hw__list">
+                      {(localModelsInfo.devices || []).map((d, i) => (
+                        <li key={`${d.kind}-${d.name}-${i}`}>
+                          <strong>{(d.kind || 'device').toUpperCase()}</strong> {d.name}
+                          {d.memory_gb != null
+                            ? ` · ${d.memory_gb} GB`
+                            : d.memory_gb_estimate != null
+                              ? ` · ~${d.memory_gb_estimate} GB shared`
+                              : ' · shared memory'}
+                          {d.suggested_name ? ` → ${d.suggested_name}` : ''}
+                        </li>
+                      ))}
+                    </ul>
+                    <p className="settings-description">
+                      Suggested: <strong>{localModelsInfo.suggested_name}</strong>
+                      {localModelsInfo.backends?.llama_cpp || localModelsInfo.backends?.llama_server
+                        ? ' · local llama.cpp runtime ready'
+                        : localModelsInfo.backends?.transformers
+                          ? ' · transformers ready'
+                          : ' · first download also fetches a llama.cpp binary for this OS'}
+                    </p>
+                    {(localJob?.status === 'downloading' || localJob?.status === 'loading') && (
+                      <div className="settings-hw__job">
+                        <div className="settings-hw__bar" aria-hidden>
+                          <span style={{ width: `${Math.max(4, localJob.progress || 0)}%` }} />
+                        </div>
+                        <p className="settings-description">
+                          {localJob.message || localJob.status} ({localJob.progress || 0}%)
+                        </p>
+                      </div>
+                    )}
+                    {localJob?.status === 'error' ? (
+                      <p className="settings-description settings-hw__err">{localJob.error || localJob.message}</p>
+                    ) : null}
+                    <div className="settings-hw__actions">
+                      <button
+                        type="button"
+                        className="settings-storage-btn"
+                        disabled={localJob?.status === 'downloading' || localJob?.status === 'loading'}
+                        onClick={async () => {
+                          const mid = localModelsInfo.suggested_model_id
+                          if (!mid) return
+                          try {
+                            await downloadLocalModel(mid)
+                            setLocalJob({
+                              status: 'downloading',
+                              progress: 1,
+                              model_id: mid,
+                              message: 'Starting download…',
+                            })
+                          } catch (err) {
+                            alert(err?.message || 'Download failed.')
+                          }
+                        }}
+                      >
+                        Download suggested model
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <p className="settings-description">Detecting GPU/NPU…</p>
+                )}
               </div>
               <div className="settings-section">
                 <label className="settings-label">API keys</label>
@@ -3243,6 +3745,156 @@ function App() {
                   <option value="gated">Gated writes (recommended)</option>
                   <option value="limited_auto">Limited auto</option>
                 </select>
+              </div>
+              <div className="settings-section">
+                <label className="settings-label">Run mode</label>
+                <p className="settings-description">
+                  Plan blocks shell, file writes, email send, and GUI. Draft always asks before those. Agent uses the autonomy level above.
+                </p>
+                <select
+                  className="settings-model-select"
+                  value={runMode}
+                  onChange={async (e) => {
+                    const v = e.target.value
+                    try {
+                      await setRunMode(v)
+                      setRunModeState(v)
+                    } catch (err) {
+                      alert(err?.message || 'Could not save run mode.')
+                    }
+                  }}
+                >
+                  <option value="plan">Plan only</option>
+                  <option value="draft">Draft + approve</option>
+                  <option value="agent">Agent</option>
+                </select>
+              </div>
+              <div className="settings-section">
+                <label className="settings-label">Spend cap (tokens / run)</label>
+                <p className="settings-description">
+                  Hard stop when a single run exceeds this estimate. Live meter is above the composer.
+                </p>
+                <input
+                  className="settings-model-select"
+                  type="number"
+                  min={1000}
+                  step={1000}
+                  value={spendLimits.max_tokens_per_run}
+                  onChange={(e) =>
+                    setSpendLimitsState({
+                      ...spendLimits,
+                      max_tokens_per_run: Number(e.target.value) || 80000,
+                    })
+                  }
+                  onBlur={async () => {
+                    try {
+                      const next = await setSpendLimits(spendLimits.max_tokens_per_run, spendLimits.warn_tokens)
+                      setSpendLimitsState(next)
+                    } catch (err) {
+                      alert(err?.message || 'Could not save spend cap.')
+                    }
+                  }}
+                />
+              </div>
+              <div className="settings-section">
+                <label className="settings-label">Quiet hours</label>
+                <p className="settings-description">
+                  Scheduled agent routines wait until this window ends (unless the routine opts out).
+                </p>
+                <label className="settings-check">
+                  <input
+                    type="checkbox"
+                    checked={!!quietHours.enabled}
+                    onChange={async (e) => {
+                      const next = { ...quietHours, enabled: e.target.checked }
+                      setQuietHoursState(next)
+                      await setQuietHours(next)
+                    }}
+                  />
+                  Enabled
+                </label>
+                <div className="settings-quiet-row">
+                  <input
+                    type="time"
+                    value={quietHours.start}
+                    onChange={(e) => setQuietHoursState({ ...quietHours, start: e.target.value })}
+                    onBlur={() => setQuietHours(quietHours)}
+                  />
+                  <span>to</span>
+                  <input
+                    type="time"
+                    value={quietHours.end}
+                    onChange={(e) => setQuietHoursState({ ...quietHours, end: e.target.value })}
+                    onBlur={() => setQuietHours(quietHours)}
+                  />
+                </div>
+              </div>
+              <div className="settings-section">
+                <label className="settings-label">Identity + facts</label>
+                <p className="settings-description">
+                  Always-loaded SOUL / USER / MEMORY files, plus decaying exact facts. Say <code>remember …</code> in chat to add a fact.
+                </p>
+                <textarea
+                  className="settings-identity"
+                  rows={4}
+                  value={identity.user || ''}
+                  onChange={(e) => setIdentity({ ...identity, user: e.target.value })}
+                  onBlur={() => saveIdentity({ user: identity.user })}
+                  placeholder="USER.md"
+                />
+                <div className="settings-fact-add">
+                  <input
+                    value={factDraft}
+                    onChange={(e) => setFactDraft(e.target.value)}
+                    placeholder="Add a fact"
+                  />
+                  <button
+                    type="button"
+                    className="settings-storage-btn"
+                    onClick={async () => {
+                      if (!factDraft.trim()) return
+                      await addFact(factDraft.trim())
+                      setFactDraft('')
+                      refreshMemoryExtras()
+                    }}
+                  >
+                    Add
+                  </button>
+                </div>
+                <ul className="settings-fact-list">
+                  {facts.slice(0, 8).map((f) => (
+                    <li key={f.id}>
+                      <span>{f.text}</span>
+                      <button type="button" onClick={async () => { await deleteFact(f.id); refreshMemoryExtras() }}>
+                        ×
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+              <div className="settings-section">
+                <label className="settings-label">Checkpoints</label>
+                <p className="settings-description">
+                  File writes are snapshotted. Restore the previous contents if a tool call went wrong.
+                </p>
+                <ul className="settings-fact-list">
+                  {checkpoints.slice(0, 6).map((c) => (
+                    <li key={c.id}>
+                      <span>{c.kind}: {c.summary}</span>
+                      {c.kind === 'workspace_write' ? (
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            const r = await restoreCheckpoint(c.id)
+                            if (!r?.ok) alert(r?.error || 'Could not restore.')
+                          }}
+                        >
+                          Undo
+                        </button>
+                      ) : null}
+                    </li>
+                  ))}
+                </ul>
               </div>
               <div className="settings-section">
                 <label className="settings-label">Desktop GUI control</label>
@@ -3393,7 +4045,44 @@ function App() {
         </footer>
         </div>
         )}
+        {agentEditorId ? (
+          <CustomAgentEditor
+            agentId={agentEditorId}
+            onClose={() => setAgentEditorId(null)}
+            onChanged={async () => {
+              await refreshCustomAgents()
+              if (currentChatId) {
+                try {
+                  const msgs = await readChatLog(currentChatId)
+                  setMessages(msgs || [])
+                } catch {
+                  /* ignore */
+                }
+              }
+            }}
+            onDeleted={async () => {
+              setAgentEditorId(null)
+              await refreshCustomAgents()
+              const chatId = await createNewChat()
+              setCurrentChatIdState(chatId)
+              setMessages([])
+              await refreshChatList()
+            }}
+          />
+        ) : null}
       </div>
+      <CreateAgentModal
+        open={createAgentOpen}
+        busy={creatingAgent}
+        error={createAgentError}
+        onClose={() => {
+          if (!creatingAgent) {
+            setCreateAgentOpen(false)
+            setCreateAgentError('')
+          }
+        }}
+        onSubmit={handleCreateAgentFromBrief}
+      />
     </div>
   )
 }

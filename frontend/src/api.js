@@ -56,6 +56,7 @@ export async function sendMessage(
   webSearchQuery = null,
   codingMode = false,
   codingProjectSnapshot = null,
+  customAgentId = null,
 ) {
   const { reply } = await request('/chat/send-message', {
     method: 'POST',
@@ -66,6 +67,7 @@ export async function sendMessage(
       web_search_query: webSearchQuery || null,
       coding_mode: !!codingMode,
       coding_project_snapshot: codingProjectSnapshot || null,
+      custom_agent_id: customAgentId || null,
     }),
   });
   return reply;
@@ -87,9 +89,12 @@ export async function sendMessageStream(
     onToolUsed,
     onStatus,
     onAgentStep,
+    onUsage,
     webSearchQuery = null,
     codingMode = false,
     codingProjectSnapshot = null,
+    customAgentId = null,
+    resumeTaskId = null,
     signal = null,
   },
 ) {
@@ -106,6 +111,8 @@ export async function sendMessageStream(
       web_search_query: webSearchQuery || null,
       coding_mode: !!codingMode,
       coding_project_snapshot: codingProjectSnapshot || null,
+      custom_agent_id: customAgentId || null,
+      resume_task_id: resumeTaskId || null,
     }),
   })
   if (!res.ok) throw new Error(await res.text() || `HTTP ${res.status}`)
@@ -140,6 +147,10 @@ export async function sendMessageStream(
             onAgentStep?.(data)
             continue
           }
+          if (data.type === 'usage') {
+            onUsage?.(data)
+            continue
+          }
           if (data.delta != null) {
             full += data.delta
             onChunk?.(data.delta)
@@ -157,6 +168,7 @@ export async function sendMessageStream(
               file_edits: data.file_edits ?? null,
               pending_approvals: data.pending_approvals ?? null,
               run_id: data.run_id ?? null,
+              task_id: data.task_id ?? null,
             }
           }
         } catch (_) {}
@@ -182,6 +194,7 @@ export async function sendMessageWithFiles(
   webSearchQuery = null,
   codingMode = false,
   codingProjectSnapshot = null,
+  customAgentId = null,
 ) {
   const form = new FormData();
   form.append('message', message || '');
@@ -189,6 +202,8 @@ export async function sendMessageWithFiles(
   if (webSearchQuery) form.append('web_search_query', webSearchQuery);
   if (codingMode) form.append('coding_mode', 'true');
   if (codingProjectSnapshot) form.append('coding_project_snapshot', codingProjectSnapshot);
+  if (customAgentId) form.append('custom_agent_id', customAgentId);
+  if (customAgentId) form.append('custom_agent_id', customAgentId);
   for (const f of files) {
     form.append('files', f);
   }
@@ -250,18 +265,53 @@ export async function setChatsStoragePath(path) {
   });
 }
 
-/** Current LLM provider: "openai" (GPT) or "xai" (Grok). */
+/** Current LLM provider: "openai" (GPT), "xai" (Grok), or "local". */
 export async function getModelSetting() {
-  const { provider } = await request('/settings/model');
-  return provider || 'openai';
+  const data = await request('/settings/model');
+  return {
+    provider: data?.provider || 'openai',
+    local_model_id: data?.local_model_id || '',
+  };
 }
 
-export async function setModelSetting(provider) {
+export async function setModelSetting(provider, localModelId = null) {
+  let p = 'openai'
+  let mid = localModelId
+  if (typeof provider === 'string' && provider.startsWith('local:')) {
+    p = 'local'
+    mid = provider.slice(6)
+  } else if (provider === 'xai') {
+    p = 'xai'
+  } else if (provider === 'local') {
+    p = 'local'
+  }
   await request('/settings/model', {
     method: 'POST',
-    body: JSON.stringify({ provider: provider === 'xai' ? 'xai' : 'openai' }),
+    body: JSON.stringify({ provider: p, local_model_id: mid || null }),
   });
-  return provider;
+  return p;
+}
+
+export async function getLocalModels() {
+  return request('/settings/local-models')
+}
+
+export async function getLocalModelJob() {
+  return request('/settings/local-models/status')
+}
+
+export async function downloadLocalModel(modelId) {
+  return request('/settings/local-models/download', {
+    method: 'POST',
+    body: JSON.stringify({ model_id: modelId }),
+  })
+}
+
+export async function loadLocalModel(modelId) {
+  return request('/settings/local-models/load', {
+    method: 'POST',
+    body: JSON.stringify({ model_id: modelId }),
+  })
 }
 
 /** WebSocket URL for agent steps (use wsOrigin for WS) */
@@ -451,4 +501,209 @@ export async function pickWorkspaceFolderNative() {
   } catch {
     return null
   }
+}
+
+export async function listCustomAgents(includeHidden = true) {
+  const q = includeHidden ? '?include_hidden=true' : '?include_hidden=false'
+  return request(`/custom-agents${q}`)
+}
+
+export async function getCustomAgent(agentId) {
+  return request(`/custom-agents/${encodeURIComponent(agentId)}`)
+}
+
+export async function createCustomAgent(nameOrFields = 'New Agent') {
+  const body =
+    nameOrFields && typeof nameOrFields === 'object'
+      ? {
+          name: nameOrFields.name || 'New Agent',
+          brief: nameOrFields.brief || '',
+          title: nameOrFields.title || null,
+          description: nameOrFields.description || null,
+          emoji: nameOrFields.emoji || null,
+        }
+      : { name: nameOrFields || 'New Agent' }
+  return request('/custom-agents', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  })
+}
+
+export async function patchCustomAgent(agentId, patch) {
+  return request(`/custom-agents/${encodeURIComponent(agentId)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(patch || {}),
+  })
+}
+
+export async function duplicateCustomAgent(agentId) {
+  return request(`/custom-agents/${encodeURIComponent(agentId)}/duplicate`, { method: 'POST' })
+}
+
+export async function deleteCustomAgent(agentId) {
+  return request(`/custom-agents/${encodeURIComponent(agentId)}`, { method: 'DELETE' })
+}
+
+export async function saveCustomAgentMemory(agentId, content) {
+  return request(`/custom-agents/${encodeURIComponent(agentId)}/memory`, {
+    method: 'PUT',
+    body: JSON.stringify({ content: content || '' }),
+  })
+}
+
+export async function saveCustomAgentSkill(agentId, { name, description, body, skillId }) {
+  return request(`/custom-agents/${encodeURIComponent(agentId)}/skills`, {
+    method: 'PUT',
+    body: JSON.stringify({
+      name,
+      description,
+      body,
+      skill_id: skillId || null,
+    }),
+  })
+}
+
+export async function deleteCustomAgentSkill(agentId, skillId) {
+  return request(
+    `/custom-agents/${encodeURIComponent(agentId)}/skills/${encodeURIComponent(skillId)}`,
+    { method: 'DELETE' },
+  )
+}
+
+export async function uploadCustomAgentKnowledge(agentId, files) {
+  const form = new FormData()
+  for (const f of files || []) form.append('files', f)
+  const base = getApiBase()
+  const res = await fetch(`${base}/custom-agents/${encodeURIComponent(agentId)}/knowledge`, {
+    method: 'POST',
+    body: form,
+    credentials: 'include',
+  })
+  if (!res.ok) throw new Error((await res.text()) || `HTTP ${res.status}`)
+  return res.json()
+}
+
+export async function deleteCustomAgentKnowledge(agentId, filename) {
+  return request(
+    `/custom-agents/${encodeURIComponent(agentId)}/knowledge/${encodeURIComponent(filename)}`,
+    { method: 'DELETE' },
+  )
+}
+
+export async function saveCustomAgentRoutine(agentId, routine, routineId = null) {
+  const path = routineId
+    ? `/custom-agents/${encodeURIComponent(agentId)}/routines/${encodeURIComponent(routineId)}`
+    : `/custom-agents/${encodeURIComponent(agentId)}/routines`
+  return request(path, {
+    method: routineId ? 'PUT' : 'POST',
+    body: JSON.stringify(routine),
+  })
+}
+
+export async function deleteCustomAgentRoutine(agentId, routineId) {
+  return request(
+    `/custom-agents/${encodeURIComponent(agentId)}/routines/${encodeURIComponent(routineId)}`,
+    { method: 'DELETE' },
+  )
+}
+
+export async function testCustomAgentRoutine(agentId, routineId) {
+  return request(
+    `/custom-agents/${encodeURIComponent(agentId)}/routines/${encodeURIComponent(routineId)}/test`,
+    { method: 'POST' },
+  )
+}
+
+export async function getCustomAgentToolCatalog() {
+  return request('/custom-agents/tools')
+}
+
+export async function setRunMode(runMode) {
+  return request('/settings/run-mode', {
+    method: 'POST',
+    body: JSON.stringify({ run_mode: runMode }),
+  })
+}
+
+export async function setSpendLimits(maxTokens, warnTokens) {
+  return request('/settings/spend', {
+    method: 'POST',
+    body: JSON.stringify({
+      max_tokens_per_run: maxTokens,
+      warn_tokens: warnTokens,
+    }),
+  })
+}
+
+export async function setQuietHours(payload) {
+  return request('/settings/quiet-hours', {
+    method: 'POST',
+    body: JSON.stringify(payload || {}),
+  })
+}
+
+export async function listTasks(chatId = null, openOnly = false) {
+  const q = new URLSearchParams()
+  if (chatId) q.set('chat_id', chatId)
+  if (openOnly) q.set('open_only', 'true')
+  const suffix = q.toString() ? `?${q}` : ''
+  return request(`/tasks${suffix}`)
+}
+
+export async function cancelTask(taskId) {
+  return request(`/tasks/${encodeURIComponent(taskId)}/cancel`, { method: 'POST' })
+}
+
+export async function listActiveRuns(chatId = null) {
+  const q = chatId ? `?chat_id=${encodeURIComponent(chatId)}` : ''
+  return request(`/agent/runs${q}`)
+}
+
+export async function stopActiveRun(runId) {
+  return request(`/agent/runs/${encodeURIComponent(runId)}/stop`, { method: 'POST' })
+}
+
+export async function steerActiveRun(runId, note) {
+  return request(`/agent/runs/${encodeURIComponent(runId)}/steer`, {
+    method: 'POST',
+    body: JSON.stringify({ note }),
+  })
+}
+
+export async function listCheckpoints(runId = null) {
+  const q = runId ? `?run_id=${encodeURIComponent(runId)}` : ''
+  return request(`/agent/checkpoints${q}`)
+}
+
+export async function restoreCheckpoint(checkpointId) {
+  return request('/agent/checkpoints/restore', {
+    method: 'POST',
+    body: JSON.stringify({ checkpoint_id: checkpointId }),
+  })
+}
+
+export async function listFacts() {
+  return request('/memory/facts')
+}
+
+export async function addFact(text, key = '') {
+  return request('/memory/facts', {
+    method: 'POST',
+    body: JSON.stringify({ text, key: key || null }),
+  })
+}
+
+export async function deleteFact(factId) {
+  return request(`/memory/facts/${encodeURIComponent(factId)}`, { method: 'DELETE' })
+}
+
+export async function getIdentity() {
+  return request('/memory/identity')
+}
+
+export async function saveIdentity(payload) {
+  return request('/memory/identity', {
+    method: 'PUT',
+    body: JSON.stringify(payload || {}),
+  })
 }

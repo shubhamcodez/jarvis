@@ -37,6 +37,10 @@ def empty_state(chat_id: str = "", run_id: Optional[str] = None) -> dict[str, An
         "budget": {"max_steps": 20, "max_specialists": 5, "steps_used": 0, "replans": 0},
         "hitl": [],
         "action_signatures": [],
+        "task_id": "",
+        "status": "idle",
+        "next_action": "",
+        "owner": "ada",
         "updated_at": time.time(),
     }
 
@@ -71,10 +75,11 @@ def begin_run(
     chat_id: Optional[str],
     task_spec: dict[str, Any],
     seed_agents: Optional[list[dict[str, Any]]] = None,
+    run_id: Optional[str] = None,
 ) -> dict[str, Any]:
     st = load_state(chat_id)
     st["chat_id"] = chat_id or st.get("chat_id") or ""
-    st["run_id"] = str(uuid.uuid4())
+    st["run_id"] = run_id or str(uuid.uuid4())
     st["goal"] = (task_spec or {}).get("goal") or ""
     st["task_spec"] = task_spec or {}
     budget = dict(st.get("budget") or {})
@@ -99,7 +104,55 @@ def begin_run(
         plan[0]["status"] = "active"
     st["plan"] = plan
     st["current_step"] = 1 if plan else 0
+    st["status"] = "active"
+    st["owner"] = (plan[0].get("agent") if plan else None) or "ada"
+    st["next_action"] = (plan[0].get("goal") if plan else "") or st.get("goal") or ""
     save_state(st)
+    if plan:
+        try:
+            from agents.tasks import create_task
+
+            task = create_task(
+                chat_id=st.get("chat_id") or "",
+                run_id=st.get("run_id") or "",
+                title=st.get("goal") or "",
+                goal=st.get("goal") or "",
+                owner=st.get("owner") or "ada",
+                plan=plan,
+                next_action=st.get("next_action") or "",
+            )
+            st["task_id"] = task.get("id") or ""
+            save_state(st)
+        except Exception:
+            pass
+    return st
+
+
+def resume_run(chat_id: Optional[str], task: dict[str, Any]) -> dict[str, Any]:
+    st = load_state(chat_id)
+    st["chat_id"] = chat_id or st.get("chat_id") or task.get("chat_id") or ""
+    st["run_id"] = task.get("run_id") or st.get("run_id") or str(uuid.uuid4())
+    st["goal"] = task.get("goal") or st.get("goal") or ""
+    st["plan"] = list(task.get("plan") or st.get("plan") or [])
+    st["task_id"] = task.get("id") or ""
+    st["status"] = "active"
+    st["owner"] = task.get("owner") or "ada"
+    st["next_action"] = task.get("next_action") or ""
+    for step in st["plan"]:
+        if step.get("status") == "error":
+            step["status"] = "pending"
+    if st["plan"] and not any(s.get("status") == "active" for s in st["plan"]):
+        for step in st["plan"]:
+            if step.get("status") == "pending":
+                step["status"] = "active"
+                break
+    save_state(st)
+    try:
+        from agents.tasks import update_task
+
+        update_task(st["task_id"], status="active", run_id=st["run_id"], plan=st["plan"])
+    except Exception:
+        pass
     return st
 
 
@@ -116,7 +169,17 @@ def mark_plan_step(state: dict[str, Any], index: int, status: str, finding: Opti
         findings = list(state.get("findings") or [])
         findings.append(finding[:2000])
         state["findings"] = findings[-40:]
+    active = next((s for s in plan if s.get("status") == "active"), None)
+    if active:
+        state["next_action"] = f"{active.get('agent') or ''}: {active.get('goal') or ''}".strip()
+        state["owner"] = active.get("agent") or state.get("owner") or "ada"
     save_state(state)
+    try:
+        from agents.tasks import sync_from_agent_state
+
+        sync_from_agent_state(state)
+    except Exception:
+        pass
     return state
 
 
@@ -161,6 +224,10 @@ def structured_view(state: dict[str, Any]) -> str:
             lines.append(
                 f"  [{step.get('status')}] #{step.get('id')} {step.get('agent')}: {step.get('goal')}"
             )
+    if state.get("next_action"):
+        lines.append(f"Next action: {state['next_action']}")
+    if state.get("task_id"):
+        lines.append(f"Task: {state['task_id']} ({state.get('status') or 'active'})")
     findings = state.get("findings") or []
     if findings:
         lines.append("Findings: " + "; ".join(findings[-5:]))

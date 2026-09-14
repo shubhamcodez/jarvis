@@ -4,8 +4,10 @@ from __future__ import annotations
 import asyncio
 import queue
 import sys
+import threading
 import time
 import warnings
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
 
@@ -41,12 +43,20 @@ from config import (
     get_grep_root,
     get_llm_api_key,
     get_llm_provider,
+    get_local_model_id,
+    get_quiet_hours,
+    get_run_mode,
+    get_spend_limits,
+    set_local_model_id,
     get_openai_api_key,
     is_desktop_armed,
     is_packaged,
     set_autonomy_level,
     set_desktop_armed,
     set_llm_provider,
+    set_quiet_hours,
+    set_run_mode,
+    set_spend_limits,
     write_api_keys,
 )
 from agents.models import get_llm_client
@@ -98,6 +108,10 @@ from auth.google_oauth import (
     oauth_suggested_javascript_origin,
 )
 from integrations.gmail_client import fetch_gmail_profile
+from custom_agents.api import router as custom_agents_router
+from custom_agents.context import build_agent_system_prompt, filter_supervisor_plan
+from custom_agents.runtime import remember_note_from_message
+from custom_agents.store import append_memory_note, resolve_agent
 
 _GOOGLE_SID_COOKIE = "ada_google_sid"
 _LEGACY_GOOGLE_SID_COOKIE = "jarvis_google_sid"
@@ -115,7 +129,53 @@ def _clear_google_sid_cookies(response: JSONResponse | RedirectResponse) -> None
     response.delete_cookie(_LEGACY_GOOGLE_SID_COOKIE, path="/")
 
 
-app = FastAPI(title="Ada API")
+def _boot_hardware_and_runtime() -> None:
+    """First-launch probe so any packaged install sizes a local model for this machine."""
+    try:
+        from agents.hardware import detect_hardware
+
+        detect_hardware(force=True)
+        from agents.local_models import public_status
+        from config import get_local_model_id, set_local_model_id
+
+        if not get_local_model_id():
+            sid = (public_status() or {}).get("suggested_model_id")
+            if sid:
+                set_local_model_id(sid)
+    except Exception:
+        return
+    try:
+        from agents.llama_cpp_bin import ensure_binary
+
+        ensure_binary()
+    except Exception:
+        pass
+
+
+@asynccontextmanager
+async def _lifespan(_app: FastAPI):
+    from custom_agents.scheduler import scheduler_loop
+
+    threading.Thread(target=_boot_hardware_and_runtime, daemon=True).start()
+    try:
+        from agents.tasks import pause_inflight
+
+        pause_inflight()
+    except Exception:
+        pass
+    sched = asyncio.create_task(scheduler_loop())
+    try:
+        yield
+    finally:
+        sched.cancel()
+        try:
+            await sched
+        except asyncio.CancelledError:
+            pass
+
+
+app = FastAPI(title="Ada API", lifespan=_lifespan)
+app.include_router(custom_agents_router)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -207,6 +267,8 @@ class SendMessageRequest(BaseModel):
     web_search_query: Optional[str] = None
     coding_mode: bool = False
     coding_project_snapshot: Optional[str] = None  # browser-built index from open folder
+    custom_agent_id: Optional[str] = None
+    resume_task_id: Optional[str] = None
 
 
 class ChatbotResponseRequest(BaseModel):
@@ -236,6 +298,35 @@ def _prepare_coding_project_context(coding_mode: bool, snapshot: Optional[str] =
     return rules or text
 
 
+def _custom_agent_for_turn(custom_agent_id: Optional[str], chat_id: Optional[str], message: str):
+    """Load a custom agent (if any) and optionally capture an explicit remember note."""
+    profile = resolve_agent(custom_agent_id, chat_id)
+    if not profile:
+        return None
+    note = remember_note_from_message(message or "")
+    if note:
+        try:
+            append_memory_note(profile["id"], note)
+        except Exception:
+            pass
+        try:
+            from memory.facts import add_fact
+
+            add_fact(note, source="remember", confidence=0.9)
+        except Exception:
+            pass
+    return profile
+
+
+def _merge_custom_agent_system(sys_content: Optional[str], profile: Optional[dict], message: str) -> Optional[str]:
+    if not profile:
+        return sys_content
+    agent_sys = build_agent_system_prompt(profile, message or "")
+    if agent_sys and sys_content:
+        return agent_sys + "\n\n" + sys_content
+    return agent_sys or sys_content
+
+
 class AppendChatLogRequest(BaseModel):
     role: str
     content: str
@@ -254,7 +345,12 @@ class SetStoragePathRequest(BaseModel):
 
 
 class SetModelRequest(BaseModel):
-    provider: str  # "openai" or "xai"
+    provider: str  # "openai", "xai", or "local"
+    local_model_id: Optional[str] = None
+
+
+class LocalModelRequest(BaseModel):
+    model_id: str
 
 
 class SetAutonomyRequest(BaseModel):
@@ -455,6 +551,10 @@ async def send_message(body: SendMessageRequest, request: Request):
         body.coding_mode,
         body.coding_project_snapshot,
     )
+    custom_profile = _custom_agent_for_turn(body.custom_agent_id, chat_id, message)
+    custom_sys = (
+        build_agent_system_prompt(custom_profile, message) if custom_profile else None
+    )
     initial_state = {
         "message": message,
         "attachment_paths": attachment_paths,
@@ -466,6 +566,10 @@ async def send_message(body: SendMessageRequest, request: Request):
         "google_session_id": _google_session_cookie(request),
         "coding_mode": bool(body.coding_mode),
         "coding_project_context": coding_ctx,
+        "custom_agent_id": custom_profile["id"] if custom_profile else None,
+        "custom_agent_system": custom_sys,
+        "custom_agent_tools": list(custom_profile.get("tools") or []) if custom_profile else None,
+        "resume_task_id": body.resume_task_id,
     }
     graph = _get_router_graph()
     drain_task = asyncio.create_task(drain_steps())
@@ -547,6 +651,20 @@ async def send_message_stream(body: SendMessageRequest, request: Request):
         body.coding_mode,
         body.coding_project_snapshot,
     )
+    custom_profile = _custom_agent_for_turn(body.custom_agent_id, chat_id, message)
+    if not custom_profile:
+        note = remember_note_from_message(message or "")
+        if note:
+            try:
+                from memory.facts import add_fact
+
+                add_fact(note, source="remember", confidence=0.9)
+            except Exception:
+                pass
+    from agents.run_control import finish_run, start_run
+
+    stream_run = start_run(chat_id=chat_id or "", task_id="")
+    stream_run_id = stream_run.get("run_id")
 
     async def _stream_chat_reply(
         api_key_,
@@ -558,6 +676,7 @@ async def send_message_stream(body: SendMessageRequest, request: Request):
         chat_id_=None,
         provider_=None,
         trace_user_message_=None,
+        run_id_=None,
     ):
         """Run sync chat_stream in executor and yield SSE as chunks arrive. Optional tool_used for final event."""
         chunk_queue = queue.Queue()
@@ -577,7 +696,17 @@ async def send_message_stream(body: SendMessageRequest, request: Request):
 
         asyncio.ensure_future(loop.run_in_executor(None, producer))
         full = []
+        from agents.run_control import add_tokens, estimate_tokens, is_cancelled, spend_ok
+
+        add_tokens(run_id_, estimate_tokens(msg_ or ""), 0)
+        emitted = 0
         while True:
+            if run_id_ and is_cancelled(run_id_):
+                break
+            ok_spend, info = spend_ok(run_id_)
+            if run_id_ and not ok_spend:
+                yield _sse_data({"type": "usage", **info, "capped": True})
+                break
             chunk = await loop.run_in_executor(None, chunk_queue.get)
             if chunk is None:
                 break
@@ -594,7 +723,11 @@ async def send_message_stream(body: SendMessageRequest, request: Request):
                     )
                 raise chunk
             full.append(chunk)
+            usage = add_tokens(run_id_, 0, estimate_tokens(chunk))
             yield f"data: {json.dumps({'delta': chunk})}\n\n"
+            emitted += 1
+            if usage and emitted % 8 == 0:
+                yield _sse_data({"type": "usage", **usage})
         reply, file_edits = _strip_workspace_edits_from_reply("".join(full))
         if provider_ is not None and trace_user_message_ is not None:
             trace_log(
@@ -640,12 +773,25 @@ async def send_message_stream(body: SendMessageRequest, request: Request):
             pass
         # 2) Tool calls: run applicable tools (weather app, etc.) using conversation context; then inject results
         from tools.runner import run_tools_for_turn
+        allowed = set(custom_profile.get("tools") or []) if custom_profile else None
         tool_system, tool_used = run_tools_for_turn(
-            message or "", recent_turns=hist or [], web_search_query=ws_q or None
+            message or "",
+            recent_turns=hist or [],
+            web_search_query=ws_q or None,
+            allowed_tools=allowed,
         )
         if tool_system:
             sys_content = (tool_system + "\n\n" + (sys_content or "")) if sys_content else tool_system
+        try:
+            from memory.prompt_assembly import build_policy_context
+
+            extra = build_policy_context(user_message=message or "")
+            if extra:
+                sys_content = (extra + "\n\n" + (sys_content or "")).strip()
+        except Exception:
+            pass
         sys_final = (sys_content.strip() or None) if sys_content else None
+        sys_final = _merge_custom_agent_system(sys_final, custom_profile, message)
         if (coding_ctx or "").strip():
             inj = (
                 "\n\n## Project workspace (linked folder)\n"
@@ -716,8 +862,10 @@ async def send_message_stream(body: SendMessageRequest, request: Request):
                 chat_id,
                 provider_=provider,
                 trace_user_message_=message,
+                run_id_=stream_run_id,
             ):
                 yield line
+            finish_run(stream_run_id)
             return
 
         if not message:
@@ -734,8 +882,10 @@ async def send_message_stream(body: SendMessageRequest, request: Request):
                 chat_id,
                 provider_=provider,
                 trace_user_message_=message,
+                run_id_=stream_run_id,
             ):
                 yield line
+            finish_run(stream_run_id)
             return
 
         yield _sse_data({"type": "status", "phase": "supervisor", "message": "Running supervisor…"})
@@ -748,6 +898,13 @@ async def send_message_stream(body: SendMessageRequest, request: Request):
             coding_project_context=coding_ctx,
         )
         agents_plan = decision.get("agents") or []
+        if get_run_mode() == "plan":
+            decision["run_agent"] = False
+            agents_plan = []
+        if custom_profile:
+            agents_plan = filter_supervisor_plan(agents_plan, custom_profile.get("tools") or [])
+            if not agents_plan:
+                decision["run_agent"] = False
         goal = (decision.get("goal") or message).strip()
         is_task = bool(decision.get("run_agent")) and len(agents_plan) > 0
         route_labels = {
@@ -803,8 +960,10 @@ async def send_message_stream(body: SendMessageRequest, request: Request):
                 chat_id,
                 provider_=provider,
                 trace_user_message_=message,
+                run_id_=stream_run_id,
             ):
                 yield line
+            finish_run(stream_run_id)
             return
 
         # Agent path: stream each step over SSE as it happens (WebSocket still gets full payload + screenshots)
@@ -848,6 +1007,11 @@ async def send_message_stream(body: SendMessageRequest, request: Request):
             "google_session_id": google_session_id,
             "coding_mode": bool(body.coding_mode),
             "coding_project_context": coding_ctx,
+            "custom_agent_id": custom_profile["id"] if custom_profile else None,
+            "custom_agent_system": build_agent_system_prompt(custom_profile, message) if custom_profile else None,
+            "custom_agent_tools": list(custom_profile.get("tools") or []) if custom_profile else None,
+            "resume_task_id": body.resume_task_id,
+            "run_id": stream_run_id,
         }
         graph = _get_router_graph()
         stream_start = time.perf_counter()
@@ -964,6 +1128,11 @@ async def send_message_stream(body: SendMessageRequest, request: Request):
             payload["pending_approvals"] = pending
         if isinstance(result, dict) and result.get("run_id"):
             payload["run_id"] = result.get("run_id")
+        elif stream_run_id:
+            payload["run_id"] = stream_run_id
+        if isinstance(result, dict) and result.get("task_id"):
+            payload["task_id"] = result.get("task_id")
+        finish_run(result.get("run_id") if isinstance(result, dict) else stream_run_id)
         yield f"data: {json.dumps(payload)}\n\n"
 
     return StreamingResponse(
@@ -1174,32 +1343,164 @@ async def api_set_chats_storage_path(body: SetStoragePathRequest):
 # --- Settings: LLM model / provider ---
 @app.get("/settings/model")
 async def api_get_model():
-    """Return current LLM provider (openai or xai)."""
-    return {"provider": get_llm_provider()}
+    """Return current LLM provider and local model id if any."""
+    return {
+        "provider": get_llm_provider(),
+        "local_model_id": get_local_model_id() or None,
+    }
 
 
 @app.post("/settings/model")
 async def api_set_model(body: SetModelRequest):
-    """Set LLM provider to openai or xai."""
-    set_llm_provider(body.provider)
-    return {"provider": get_llm_provider()}
+    """Set LLM provider to openai, xai, or local."""
+    p = (body.provider or "").strip().lower()
+    if p.startswith("local:"):
+        body.local_model_id = p.split(":", 1)[1]
+        p = "local"
+    set_llm_provider(p)
+    if p == "local" and (body.local_model_id or "").strip():
+        mid = body.local_model_id.strip()
+        set_local_model_id(mid)
+        from agents.local_models import is_installed, load_model
+
+        if is_installed(mid):
+            await asyncio.to_thread(load_model, mid)
+    return {
+        "provider": get_llm_provider(),
+        "local_model_id": get_local_model_id() or None,
+    }
+
+
+@app.get("/settings/hardware")
+async def api_hardware():
+    from agents.local_models import public_status
+
+    return await asyncio.to_thread(public_status)
+
+
+@app.get("/settings/local-models")
+async def api_local_models():
+    from agents.local_models import public_status
+
+    return await asyncio.to_thread(public_status)
+
+
+@app.get("/settings/local-models/status")
+async def api_local_models_status():
+    from agents.local_models import job_status, loaded_model_id
+
+    return {**job_status(), "loaded_model_id": loaded_model_id()}
+
+
+@app.post("/settings/local-models/download")
+async def api_local_models_download(body: LocalModelRequest):
+    from agents.local_models import download_model
+
+    return await asyncio.to_thread(download_model, body.model_id)
+
+
+@app.post("/settings/local-models/load")
+async def api_local_models_load(body: LocalModelRequest):
+    from agents.local_models import load_model
+    from agents.models.local_client import refresh_chat_model_label
+
+    result = await asyncio.to_thread(load_model, body.model_id)
+    set_local_model_id(body.model_id)
+    set_llm_provider("local")
+    refresh_chat_model_label()
+    return result
 
 
 @app.get("/settings/runtime")
 async def api_get_runtime():
+    hw = {}
+    try:
+        from agents.hardware import detect_hardware
+
+        hw = await asyncio.to_thread(detect_hardware)
+    except Exception:
+        hw = {}
     return {
         "provider": get_llm_provider(),
         "autonomy": get_autonomy_level(),
         "desktop_armed": is_desktop_armed(),
         "packaged": is_packaged(),
         "keys": api_keys_status(),
+        "hardware": hw,
+        "run_mode": get_run_mode(),
+        "spend": get_spend_limits(),
+        "quiet_hours": get_quiet_hours(),
     }
+
+
+class SetRunModeRequest(BaseModel):
+    run_mode: str
+
+
+class SetSpendRequest(BaseModel):
+    max_tokens_per_run: Optional[int] = None
+    warn_tokens: Optional[int] = None
+
+
+class SetQuietHoursRequest(BaseModel):
+    enabled: Optional[bool] = None
+    start: Optional[str] = None
+    end: Optional[str] = None
+    timezone: Optional[str] = None
+
+
+class FactRequest(BaseModel):
+    text: str
+    key: Optional[str] = None
+
+
+class IdentityRequest(BaseModel):
+    soul: Optional[str] = None
+    user: Optional[str] = None
+    memory: Optional[str] = None
+
+
+class TaskPatchRequest(BaseModel):
+    status: Optional[str] = None
+    next_action: Optional[str] = None
+    owner: Optional[str] = None
+
+
+class SteerRequest(BaseModel):
+    note: str = ""
+
+
+class CheckpointRestoreRequest(BaseModel):
+    checkpoint_id: str
 
 
 @app.post("/settings/autonomy")
 async def api_set_autonomy(body: SetAutonomyRequest):
     set_autonomy_level(body.autonomy)
     return {"autonomy": get_autonomy_level()}
+
+
+@app.post("/settings/run-mode")
+async def api_set_run_mode(body: SetRunModeRequest):
+    return {"run_mode": set_run_mode(body.run_mode)}
+
+
+@app.post("/settings/spend")
+async def api_set_spend(body: SetSpendRequest):
+    return set_spend_limits(
+        max_tokens_per_run=body.max_tokens_per_run,
+        warn_tokens=body.warn_tokens,
+    )
+
+
+@app.post("/settings/quiet-hours")
+async def api_set_quiet_hours(body: SetQuietHoursRequest):
+    return set_quiet_hours(
+        enabled=body.enabled,
+        start=body.start,
+        end=body.end,
+        timezone=body.timezone,
+    )
 
 
 @app.post("/settings/desktop-armed")
@@ -1293,6 +1594,124 @@ async def api_agent_approve(body: AgentApproveRequest):
     from agents.hitl import resolve_approval
 
     return resolve_approval(body.approval_id, bool(body.approve))
+
+
+@app.get("/tasks")
+async def api_list_tasks(chat_id: Optional[str] = None, open_only: bool = False):
+    from agents.tasks import list_tasks
+
+    return {"tasks": list_tasks(chat_id=chat_id, open_only=open_only)}
+
+
+@app.get("/tasks/{task_id}")
+async def api_get_task(task_id: str):
+    from agents.tasks import get_task
+
+    task = get_task(task_id)
+    if not task:
+        return JSONResponse({"ok": False, "error": "unknown_task"}, status_code=404)
+    return task
+
+
+@app.patch("/tasks/{task_id}")
+async def api_patch_task(task_id: str, body: TaskPatchRequest):
+    from agents.tasks import update_task
+
+    fields = {k: v for k, v in body.model_dump().items() if v is not None}
+    task = update_task(task_id, **fields)
+    if not task:
+        return JSONResponse({"ok": False, "error": "unknown_task"}, status_code=404)
+    return task
+
+
+@app.post("/tasks/{task_id}/cancel")
+async def api_cancel_task(task_id: str):
+    from agents.tasks import get_task, update_task
+    from agents.run_control import cancel_run
+
+    task = get_task(task_id)
+    if not task:
+        return JSONResponse({"ok": False, "error": "unknown_task"}, status_code=404)
+    if task.get("run_id"):
+        cancel_run(task["run_id"], "task_cancel")
+    return update_task(task_id, status="cancelled") or task
+
+
+@app.get("/agent/runs")
+async def api_list_runs(chat_id: Optional[str] = None):
+    from agents.run_control import list_active
+
+    return {"runs": list_active(chat_id)}
+
+
+@app.post("/agent/runs/{run_id}/stop")
+async def api_stop_run(run_id: str):
+    from agents.run_control import cancel_run
+
+    rec = cancel_run(run_id, "user_stop")
+    if not rec:
+        return JSONResponse({"ok": False, "error": "unknown_run"}, status_code=404)
+    return rec
+
+
+@app.post("/agent/runs/{run_id}/steer")
+async def api_steer_run(run_id: str, body: SteerRequest):
+    from agents.run_control import push_steer
+
+    rec = push_steer(run_id, body.note)
+    if not rec:
+        return JSONResponse({"ok": False, "error": "unknown_run"}, status_code=404)
+    return rec
+
+
+@app.get("/agent/checkpoints")
+async def api_list_checkpoints(run_id: Optional[str] = None):
+    from agents.run_control import list_checkpoints
+
+    return {"checkpoints": list_checkpoints(run_id)}
+
+
+@app.post("/agent/checkpoints/restore")
+async def api_restore_checkpoint(body: CheckpointRestoreRequest):
+    from agents.run_control import restore_checkpoint
+
+    return restore_checkpoint(body.checkpoint_id)
+
+
+@app.get("/memory/facts")
+async def api_list_facts():
+    from memory.facts import list_facts
+
+    return {"facts": list_facts()}
+
+
+@app.post("/memory/facts")
+async def api_add_fact(body: FactRequest):
+    from memory.facts import add_fact
+
+    item = add_fact(body.text, key=body.key or "", source="user")
+    return {"ok": bool(item), "fact": item}
+
+
+@app.delete("/memory/facts/{fact_id}")
+async def api_delete_fact(fact_id: str):
+    from memory.facts import delete_fact
+
+    return {"ok": delete_fact(fact_id)}
+
+
+@app.get("/memory/identity")
+async def api_get_identity():
+    from memory.identity import read_identity
+
+    return read_identity()
+
+
+@app.put("/memory/identity")
+async def api_put_identity(body: IdentityRequest):
+    from memory.identity import write_identity
+
+    return write_identity(soul=body.soul, user=body.user, memory=body.memory)
 
 
 # --- Google OAuth (multi-user scaffold) ---
@@ -1470,6 +1889,7 @@ async def send_message_with_files(
     web_search_query: Optional[str] = Form(None),
     coding_mode: bool = Form(False),
     coding_project_snapshot: Optional[str] = Form(None),
+    custom_agent_id: Optional[str] = Form(None),
     files: list[UploadFile] = File(default=[]),
 ):
     """Accept multipart form: message + files. Saves files to temp and calls send_message."""
@@ -1493,6 +1913,7 @@ async def send_message_with_files(
             web_search_query=(web_search_query or "").strip() or None,
             coding_mode=bool(coding_mode),
             coding_project_snapshot=(coding_project_snapshot or "").strip() or None,
+            custom_agent_id=(custom_agent_id or "").strip() or None,
         )
         result = await send_message(body, request)
         return result
@@ -1611,7 +2032,23 @@ async def api_tools_shell(body: ShellRunRequest):
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "packaged": is_packaged()}
+    hw: dict = {}
+    try:
+        from agents.hardware import detect_hardware
+
+        raw = detect_hardware()
+        hw = {
+            "os": raw.get("os"),
+            "arch": raw.get("arch"),
+            "has_gpu": raw.get("has_gpu"),
+            "has_npu": raw.get("has_npu"),
+            "system_ram_gb": raw.get("system_ram_gb"),
+            "usable_memory_gb": raw.get("usable_memory_gb"),
+            "recommended_runtime": raw.get("recommended_runtime"),
+        }
+    except Exception:
+        pass
+    return {"status": "ok", "packaged": is_packaged(), "hardware": hw}
 
 
 if __name__ == "__main__":

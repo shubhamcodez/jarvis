@@ -15,6 +15,7 @@ def run_tools_for_turn(
     message: str,
     recent_turns: Optional[list[dict]] = None,
     web_search_query: Optional[str] = None,
+    allowed_tools: Optional[set[str]] = None,
 ) -> tuple[str, Optional[dict]]:
     """
     Run all applicable tools for this turn (e.g. weather when the user asks about weather/temperature).
@@ -29,24 +30,28 @@ def run_tools_for_turn(
     system_blocks: list[str] = []
     tool_used = None
 
+    def _allowed(name: str) -> bool:
+        return allowed_tools is None or name in allowed_tools
+
     # Python sandbox: user asked to run fenced ```python``` (pattern models can use)
-    py_tool = try_python_sandbox_tool(message or "")
-    if py_tool:
-        py_block, tool_used = py_tool
-        system_blocks.append(py_block)
-        system_content = "\n\n".join(system_blocks) if system_blocks else ""
-        return system_content, tool_used
+    if _allowed("python_sandbox"):
+        py_tool = try_python_sandbox_tool(message or "")
+        if py_tool:
+            py_block, tool_used = py_tool
+            system_blocks.append(py_block)
+            system_content = "\n\n".join(system_blocks) if system_blocks else ""
+            return system_content, tool_used
 
     # Web search: explicit query from client or natural phrasing ("search the web for …")
     wq = (web_search_query or "").strip()
     if not wq:
         wq = try_extract_web_search_query(message or "") or ""
-    if wq:
+    if wq and _allowed("web_search"):
         block, tool_used = web_search_tool_block(wq)
         system_blocks.append(block)
 
     # Weather tool: when message is about weather/temperature/forecast
-    weather_result = try_weather_tool(message or "", recent_turns=recent_turns)
+    weather_result = try_weather_tool(message or "", recent_turns=recent_turns) if _allowed("weather") else None
     if weather_result:
         location, result = weather_result
         w_tool = {"name": "weather", "input": location, "result": result}

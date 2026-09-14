@@ -13,6 +13,7 @@ def build_policy_context(
     memory_context: str = "",
     tool_system: str = "",
     untrusted_note: bool = False,
+    user_message: str = "",
 ) -> str:
     """
     Dynamically constructed model context:
@@ -22,6 +23,31 @@ def build_policy_context(
     - tool results (untrusted web content is labeled)
     """
     parts: list[str] = []
+    try:
+        from agents.execution_policy import plan_mode_system_note
+
+        note = plan_mode_system_note()
+        if note:
+            parts.append(note)
+    except Exception:
+        pass
+    try:
+        from memory.identity import format_identity_for_prompt
+
+        ident = format_identity_for_prompt()
+        if ident:
+            parts.append("IDENTITY FILES:\n" + ident)
+    except Exception:
+        pass
+    try:
+        from memory.facts import format_facts_for_prompt, retrieve_facts
+
+        facts = retrieve_facts(user_message or task_spec_text or "", limit=6)
+        fact_block = format_facts_for_prompt(facts)
+        if fact_block:
+            parts.append(fact_block)
+    except Exception:
+        pass
     if task_spec_text and task_spec_text.strip():
         parts.append("TASK SPECIFICATION (authoritative):\n" + task_spec_text.strip())
     # project_rules passed via memory_context prefix by callers when needed

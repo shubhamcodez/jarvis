@@ -1,0 +1,34 @@
+{
+  "os": "Windows 11",
+  "arch": "ARM64",
+  "cpu": "ARMv8 (64-bit) Family 8 Model 1 Revision 201, Qualcomm Technologies Inc",
+  "system_ram_gb": 31.57,
+  "devices": [
+    {
+      "kind": "gpu",
+      "vendor": "qualcomm",
+      "name": "Qualcomm(R) Adreno(TM) X1-85 GPU",
+      "memory_gb": null,
+      "memory_shared": true,
+      "source": "Win32_VideoController",
+      "pnp": "ACPI\\VEN_QCOM&DEV_0C36&SUBSYS_10280C85&REV_0088\\0",
+      "memory_gb_estimate": 7.89
+    },
+    {
+      "kind": "npu",
+      "vendor": "qualcomm",
+      "name": "Snapdragon(R) X Elite - X1E80100 - Qualcomm(R) Hexagon(TM) NPU",
+      "memory_gb": null,
+      "memory_shared": true,
+      "source": "Win32_PnPEntity",
+      "pnp": "ACPI\\QCOM0D0A\\2&DABA3FF&0",
+      "memory_gb_estimate": 7.89
+    }
+  ],
+  "has_gpu": true,
+  "has_npu": true,
+  "usable_memory_gb": 8.5,
+  "usable_from": "unified_or_system_ram",
+  "accelerator_count": 2,
+  "recommended_runtime": "win-opencl-adreno-arm64"
+}

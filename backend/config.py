@@ -25,8 +25,14 @@ def data_root() -> Path:
         p.mkdir(parents=True, exist_ok=True)
         return p
     if is_packaged():
-        appdata = os.environ.get("APPDATA") or str(Path.home() / "AppData" / "Roaming")
-        p = Path(appdata) / "Ada"
+        if sys.platform == "win32":
+            appdata = os.environ.get("APPDATA") or str(Path.home() / "AppData" / "Roaming")
+            p = Path(appdata) / "Ada"
+        elif sys.platform == "darwin":
+            p = Path.home() / "Library" / "Application Support" / "Ada"
+        else:
+            xdg = (os.environ.get("XDG_DATA_HOME") or "").strip()
+            p = Path(xdg) / "Ada" if xdg else Path.home() / ".local" / "share" / "Ada"
         p.mkdir(parents=True, exist_ok=True)
         return p
     return Path(__file__).resolve().parent.parent
@@ -77,10 +83,22 @@ _DEFAULTS: dict[str, Any] = {
     "models": {
         "routing_openai": "gpt-5-mini",
         "routing_xai": "grok-4-1-fast-non-reasoning",
+        "local_model_id": None,
     },
     "autonomy": "gated",
     "desktop_armed": False,
     "workspace_root": None,
+    "run_mode": "agent",
+    "spend": {
+        "max_tokens_per_run": 80000,
+        "warn_tokens": 40000,
+    },
+    "quiet_hours": {
+        "enabled": False,
+        "start": "23:00",
+        "end": "08:00",
+        "timezone": "local",
+    },
 }
 
 
@@ -127,17 +145,20 @@ def _merged_config() -> dict[str, Any]:
     return _deep_merge(copy.deepcopy(_DEFAULTS), _load_raw_user_config())
 
 
+_PROVIDERS = ("openai", "xai", "local")
+
+
 def get_llm_provider() -> str:
-    """Current LLM provider: 'openai' or 'xai'. From ada-config.yaml (or legacy files if missing)."""
+    """Current LLM provider: 'openai', 'xai', or 'local'."""
     prov = str(_merged_config().get("llm_provider") or "openai").strip().lower()
-    return prov if prov in ("openai", "xai") else "openai"
+    return prov if prov in _PROVIDERS else "openai"
 
 
 def set_llm_provider(provider: str) -> None:
-    """Set LLM provider to 'openai' or 'xai'; writes ada-config.yaml."""
+    """Set LLM provider; writes ada-config.yaml."""
     p = (provider or "").strip().lower()
-    if p not in ("openai", "xai"):
-        raise ValueError("provider must be 'openai' or 'xai'")
+    if p not in _PROVIDERS:
+        raise ValueError("provider must be 'openai', 'xai', or 'local'")
     CONFIG_YAML.parent.mkdir(parents=True, exist_ok=True)
     raw: dict[str, Any] = {}
     yml = _yaml_to_load()
@@ -165,10 +186,39 @@ def get_xai_api_key() -> str:
 
 
 def get_llm_api_key() -> str:
-    """API key for the current LLM provider."""
-    if get_llm_provider() == "xai":
+    """API key for the current LLM provider. Local models do not need a key."""
+    p = get_llm_provider()
+    if p == "local":
+        return "local"
+    if p == "xai":
         return get_xai_api_key()
     return get_openai_api_key()
+
+
+def get_local_model_id() -> str:
+    mid = (_merged_config().get("models") or {}).get("local_model_id")
+    return str(mid or "").strip()
+
+
+def set_local_model_id(model_id: str) -> None:
+    raw: dict[str, Any] = {}
+    yml = _yaml_to_load()
+    if yml is not None:
+        with yml.open(encoding="utf-8") as f:
+            raw = yaml.safe_load(f) or {}
+    models = dict(raw.get("models") or {})
+    models["local_model_id"] = (model_id or "").strip() or None
+    raw["models"] = models
+    _write_merged_yaml(raw)
+
+
+def _load_raw_for_write() -> dict[str, Any]:
+    raw: dict[str, Any] = {}
+    yml = _yaml_to_load()
+    if yml is not None:
+        with yml.open(encoding="utf-8") as f:
+            raw = yaml.safe_load(f) or {}
+    return raw
 
 
 def _write_merged_yaml(raw: dict[str, Any]) -> None:
@@ -243,6 +293,8 @@ def get_routing_model(provider: str) -> str:
     if p == "xai":
         env = (os.environ.get("XAI_ROUTING_MODEL") or "").strip()
         return env or str(models.get("routing_xai") or "grok-4-1-fast-non-reasoning")
+    if p == "local":
+        return str(models.get("local_model_id") or "local")
     env = (os.environ.get("OPENAI_ROUTING_MODEL") or "").strip()
     return env or str(models.get("routing_openai") or "gpt-5-mini")
 
@@ -318,6 +370,84 @@ def api_keys_status() -> dict[str, bool]:
             (os.environ.get("xAI_API_KEY") or os.environ.get("XAI_API_KEY") or "").strip()
         ),
     }
+
+
+_RUN_MODES = ("plan", "draft", "agent")
+
+
+def get_run_mode() -> str:
+    v = str(_merged_config().get("run_mode") or "agent").strip().lower()
+    return v if v in _RUN_MODES else "agent"
+
+
+def set_run_mode(mode: str) -> str:
+    v = (mode or "").strip().lower()
+    if v not in _RUN_MODES:
+        raise ValueError(f"run_mode must be one of {_RUN_MODES}")
+    raw = _load_raw_for_write()
+    raw["run_mode"] = v
+    _write_merged_yaml(raw)
+    return v
+
+
+def get_spend_limits() -> dict[str, int]:
+    spend = _merged_config().get("spend") or {}
+    try:
+        cap = max(1000, min(2_000_000, int(spend.get("max_tokens_per_run") or 80000)))
+    except (TypeError, ValueError):
+        cap = 80000
+    try:
+        warn = max(500, min(cap, int(spend.get("warn_tokens") or cap // 2)))
+    except (TypeError, ValueError):
+        warn = cap // 2
+    return {"max_tokens_per_run": cap, "warn_tokens": warn}
+
+
+def set_spend_limits(*, max_tokens_per_run: int | None = None, warn_tokens: int | None = None) -> dict[str, int]:
+    cur = get_spend_limits()
+    if max_tokens_per_run is not None:
+        cur["max_tokens_per_run"] = max(1000, min(2_000_000, int(max_tokens_per_run)))
+    if warn_tokens is not None:
+        cur["warn_tokens"] = max(500, min(cur["max_tokens_per_run"], int(warn_tokens)))
+    raw = _load_raw_for_write()
+    raw["spend"] = cur
+    _write_merged_yaml(raw)
+    return cur
+
+
+def get_quiet_hours() -> dict[str, Any]:
+    qh = _merged_config().get("quiet_hours") or {}
+    start = str(qh.get("start") or "23:00").strip() or "23:00"
+    end = str(qh.get("end") or "08:00").strip() or "08:00"
+    tz = str(qh.get("timezone") or "local").strip() or "local"
+    return {
+        "enabled": bool(qh.get("enabled")),
+        "start": start[:5],
+        "end": end[:5],
+        "timezone": tz[:80],
+    }
+
+
+def set_quiet_hours(
+    *,
+    enabled: bool | None = None,
+    start: str | None = None,
+    end: str | None = None,
+    timezone: str | None = None,
+) -> dict[str, Any]:
+    cur = get_quiet_hours()
+    if enabled is not None:
+        cur["enabled"] = bool(enabled)
+    if start:
+        cur["start"] = str(start).strip()[:5]
+    if end:
+        cur["end"] = str(end).strip()[:5]
+    if timezone:
+        cur["timezone"] = str(timezone).strip()[:80]
+    raw = _load_raw_for_write()
+    raw["quiet_hours"] = cur
+    _write_merged_yaml(raw)
+    return cur
 
 
 def write_api_keys(*, openai_key: str | None = None, xai_key: str | None = None) -> None:

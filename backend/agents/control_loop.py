@@ -31,6 +31,17 @@ def should_replan(state: dict[str, Any], last_error: Optional[str] = None) -> tu
 
 
 def should_stop(state: dict[str, Any]) -> tuple[bool, str]:
+    try:
+        from agents.run_control import is_cancelled, spend_ok
+
+        rid = state.get("run_id")
+        if is_cancelled(rid):
+            return True, "user_stop"
+        ok, _ = spend_ok(rid)
+        if not ok:
+            return True, "spend_cap"
+    except Exception:
+        pass
     budget = state.get("budget") or {}
     used = int(budget.get("steps_used") or 0)
     max_steps = int(budget.get("max_steps") or 20)

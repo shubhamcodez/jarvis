@@ -28,3 +28,8 @@ class RouterState(TypedDict, total=False):
     agent_state: dict
     failure_class: Optional[str]
     pending_approvals: list
+    custom_agent_id: Optional[str]
+    custom_agent_system: Optional[str]
+    custom_agent_tools: Optional[list]
+    resume_task_id: Optional[str]
+    task_id: Optional[str]

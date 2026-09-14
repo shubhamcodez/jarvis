@@ -1,12 +1,16 @@
-"""Models / API clients (OpenAI, xAI Grok, etc.)."""
+"""Models / API clients (OpenAI, xAI Grok, local Hugging Face)."""
+from . import local_client
 from . import openai_client
 from . import xai_client
 
 
 def get_llm_client(provider: str):
-    """Return the client module for the given provider: 'openai' or 'xai'."""
-    if (provider or "").strip().lower() == "xai":
+    """Return the client module for the given provider: 'openai', 'xai', or 'local'."""
+    p = (provider or "").strip().lower()
+    if p == "xai":
         return xai_client
+    if p == "local":
+        return local_client
     return openai_client
 
 
@@ -30,4 +34,5 @@ __all__ = [
     "get_llm_client",
     "openai_client",
     "xai_client",
+    "local_client",
 ]

@@ -1,0 +1,142 @@
+"""Structured facts with use-count and time decay (exact lookup, not embeddings)."""
+from __future__ import annotations
+
+import json
+import math
+import re
+import threading
+import time
+import uuid
+from pathlib import Path
+from typing import Any, Optional
+
+from config import data_root
+
+_LOCK = threading.Lock()
+_WORD = re.compile(r"[a-z0-9]{3,}")
+_HALF_LIFE_DAYS = 30.0
+
+
+def _path() -> Path:
+    d = data_root() / "memory"
+    d.mkdir(parents=True, exist_ok=True)
+    return d / "facts.json"
+
+
+def _load() -> list[dict[str, Any]]:
+    path = _path()
+    if not path.exists():
+        return []
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if isinstance(data, list):
+            return [x for x in data if isinstance(x, dict)]
+    except (OSError, json.JSONDecodeError):
+        pass
+    return []
+
+
+def _save(items: list[dict[str, Any]]) -> None:
+    path = _path()
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(items, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp.replace(path)
+
+
+def _score(item: dict[str, Any], now: Optional[float] = None) -> float:
+    now = now or time.time()
+    age_days = max(0.0, (now - float(item.get("last_used") or item.get("created_at") or now)) / 86400.0)
+    decay = 0.5 ** (age_days / _HALF_LIFE_DAYS)
+    uses = math.log1p(float(item.get("uses") or 0))
+    conf = float(item.get("confidence") or 0.7)
+    return conf * decay * (1.0 + uses)
+
+
+def add_fact(
+    text: str,
+    *,
+    key: str = "",
+    source: str = "user",
+    confidence: float = 0.8,
+) -> Optional[dict[str, Any]]:
+    body = (text or "").strip()
+    if not body:
+        return None
+    now = time.time()
+    item = {
+        "id": "fct_" + uuid.uuid4().hex[:10],
+        "key": (key or "")[:80],
+        "text": body[:500],
+        "source": (source or "user")[:40],
+        "confidence": max(0.1, min(1.0, float(confidence))),
+        "uses": 0,
+        "created_at": now,
+        "last_used": now,
+    }
+    with _LOCK:
+        items = _load()
+        if item["key"]:
+            items = [x for x in items if x.get("key") != item["key"]]
+        else:
+            low = item["text"].lower()
+            items = [x for x in items if (x.get("text") or "").lower() != low]
+        items.insert(0, item)
+        _save(items[:400])
+    return item
+
+
+def list_facts(limit: int = 40) -> list[dict[str, Any]]:
+    now = time.time()
+    with _LOCK:
+        items = _load()
+    ranked = sorted(items, key=lambda x: _score(x, now), reverse=True)
+    return ranked[: max(1, min(200, int(limit)))]
+
+
+def delete_fact(fact_id: str) -> bool:
+    fid = (fact_id or "").strip()
+    if not fid:
+        return False
+    with _LOCK:
+        items = _load()
+        nxt = [x for x in items if x.get("id") != fid]
+        if len(nxt) == len(items):
+            return False
+        _save(nxt)
+    return True
+
+
+def retrieve_facts(query: str, *, limit: int = 8) -> list[dict[str, Any]]:
+    q = (query or "").strip().lower()
+    words = set(_WORD.findall(q)) if q else set()
+    now = time.time()
+    touched: list[dict[str, Any]] = []
+    with _LOCK:
+        items = _load()
+        scored: list[tuple[float, dict[str, Any]]] = []
+        for item in items:
+            text = (item.get("text") or "").lower()
+            key = (item.get("key") or "").lower()
+            overlap = len(words & set(_WORD.findall(text + " " + key))) if words else 0
+            base = _score(item, now)
+            bonus = 2.5 * overlap if words else 0.0
+            if words and overlap == 0 and base < 0.35:
+                continue
+            scored.append((base + bonus, item))
+        scored.sort(key=lambda x: x[0], reverse=True)
+        for _, item in scored[: max(1, min(20, int(limit)))]:
+            item["uses"] = int(item.get("uses") or 0) + 1
+            item["last_used"] = now
+            touched.append(dict(item))
+        if touched:
+            _save(items)
+    return touched
+
+
+def format_facts_for_prompt(items: list[dict[str, Any]]) -> str:
+    if not items:
+        return ""
+    lines = ["KNOWN FACTS (exact; prefer these over guesses):"]
+    for item in items:
+        lines.append(f"- {item.get('text')}")
+    return "\n".join(lines)

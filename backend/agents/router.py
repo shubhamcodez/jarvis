@@ -27,6 +27,18 @@ async def _supervisor_node(state: RouterState) -> RouterState:
         coding_project_context=(state.get("coding_project_context") or ""),
     )
     agents = decision.get("agents") or []
+    tools = state.get("custom_agent_tools")
+    if tools is not None:
+        from custom_agents.context import filter_supervisor_plan
+
+        agents = filter_supervisor_plan(agents, list(tools))
+        decision = {**decision, "agents": agents, "run_agent": bool(agents)}
+        if agents:
+            decision["agent"] = agents[0].get("agent")
+            decision["goal"] = agents[0].get("goal") or decision.get("goal")
+        else:
+            decision["agent"] = None
+            decision["goal"] = None
     goal = (
         (agents[0].get("goal") if agents else None)
         or (decision.get("goal") or "")
@@ -36,19 +48,58 @@ async def _supervisor_node(state: RouterState) -> RouterState:
     from .agent_state import begin_run
     from .task_spec import build_task_spec
 
+    from agents.execution_policy import mode_label
+
+    if mode_label() == "plan":
+        decision = {**decision, "run_agent": False, "agents": []}
+        agents = []
+        goal = (decision.get("goal") or message or "").strip()
     spec = build_task_spec(
         message,
         decision,
         coding_mode=bool(state.get("coding_mode")),
         workspace_root=get_workspace_root() or None,
     )
-    ast = begin_run(state.get("chat_id"), spec, agents)
+    resume_id = (state.get("resume_task_id") or "").strip()
+    if resume_id:
+        from agents.tasks import get_task
+        from .agent_state import resume_run
+
+        task = get_task(resume_id)
+        if task:
+            ast = resume_run(state.get("chat_id") or task.get("chat_id"), task)
+            leftover = [
+                {"agent": s.get("agent"), "goal": s.get("goal")}
+                for s in (task.get("plan") or [])
+                if s.get("status") in ("pending", "active", "error") and s.get("agent")
+            ]
+            if leftover:
+                decision = {**decision, "run_agent": True, "agents": leftover}
+                agents = leftover
+            else:
+                decision = {**decision, "run_agent": False, "agents": []}
+                agents = []
+        else:
+            ast = begin_run(state.get("chat_id"), spec, agents, run_id=state.get("run_id"))
+    else:
+        ast = begin_run(state.get("chat_id"), spec, agents, run_id=state.get("run_id"))
+    try:
+        from agents.run_control import start_run
+
+        start_run(
+            chat_id=state.get("chat_id") or "",
+            task_id=ast.get("task_id") or "",
+            run_id=ast.get("run_id"),
+        )
+    except Exception:
+        pass
     return {
         "supervisor_decision": decision,
         "goal": goal,
         "task_spec": spec,
         "agent_state": ast,
         "run_id": ast.get("run_id"),
+        "task_id": ast.get("task_id"),
     }
 
 
@@ -94,8 +145,12 @@ async def _chat_node(state: RouterState) -> RouterState:
 
     # Tool calls: every turn has conversation; then run applicable tools (weather, etc.) and inject results
     wq = (state.get("web_search_query") or "").strip() or None
+    allowed = state.get("custom_agent_tools")
     tool_system, tool_used = run_tools_for_turn(
-        message or "", recent_turns=recent_turns or [], web_search_query=wq
+        message or "",
+        recent_turns=recent_turns or [],
+        web_search_query=wq,
+        allowed_tools=set(allowed) if allowed is not None else None,
     )
     from memory.prompt_assembly import build_policy_context
     from tools.project_rules import load_project_rules
@@ -110,7 +165,11 @@ async def _chat_node(state: RouterState) -> RouterState:
         memory_context=mem,
         tool_system=tool_system or "",
         untrusted_note=bool(wq),
+        user_message=message,
     ).strip() or None
+    extra_sys = (state.get("custom_agent_system") or "").strip()
+    if extra_sys:
+        system_content = (extra_sys + "\n\n" + (system_content or "")).strip() or extra_sys
     reply = await asyncio.to_thread(
         client.chat,
         api_key,
@@ -196,11 +255,33 @@ async def _run_agent_plan_node(state: RouterState) -> RouterState:
     last_tool: Optional[dict] = None
     last_route = "run_multi_agent"
 
+    run_id = state.get("run_id") or (state.get("agent_state") or {}).get("run_id")
     for idx, item in enumerate(plan):
+        from agents.run_control import (
+            finish_child,
+            is_cancelled,
+            pop_steer,
+            register_child,
+            spend_ok,
+        )
+
+        if is_cancelled(run_id):
+            sections.append("_Stopped by user._")
+            break
+        ok_spend, spend_info = spend_ok(run_id)
+        if not ok_spend:
+            sections.append(
+                f"_Spend cap reached ({spend_info.get('tokens_used')} / {spend_info.get('max_tokens')} tokens)._"
+            )
+            break
         agent = item.get("agent")
         base_goal = (item.get("goal") or "").strip()
         if not agent or not base_goal:
             continue
+        steer = pop_steer(run_id)
+        if steer:
+            base_goal = f"{base_goal}\n\nUser steer (follow this): {steer}"
+        child_id = register_child(run_id, name=str(agent), agent=str(agent))
 
         if idx > 0 and prev_snippets:
             ctx = (
@@ -273,6 +354,7 @@ async def _run_agent_plan_node(state: RouterState) -> RouterState:
             reply = f"**{agent}** failed: {e}"
             tu = None
             ast = record_error(ast, str(e))
+        finish_child(run_id, child_id, "error" if tu is None and "failed:" in (reply or "").lower() else "complete")
 
         ast = record_action_signature(ast, f"{agent}|{base_goal[:80]}")
         failed = bool(tu is None and "failed:" in (reply or "").lower()) or (

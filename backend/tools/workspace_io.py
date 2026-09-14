@@ -104,11 +104,42 @@ def read_file(rel_path: str, max_bytes: int = 400_000) -> dict[str, Any]:
     return {"ok": True, "path": rel_path, "content": data.decode("utf-8", errors="replace")}
 
 
-def write_file(rel_path: str, content: str) -> dict[str, Any]:
+def write_file_raw(rel_path: str, content: str) -> dict[str, Any]:
+    """Write without policy/checkpoint (used to restore a checkpoint)."""
     target = resolve_under_root(rel_path)
     if not target.parent.exists():
         return {"ok": False, "error": "Parent folder missing.", "path": rel_path}
     text = content if isinstance(content, str) else str(content or "")
+    target.write_text(text, encoding="utf-8")
+    return {"ok": True, "path": rel_path}
+
+
+def write_file(rel_path: str, content: str) -> dict[str, Any]:
+    from agents.execution_policy import deny_if_blocked
+    from agents.run_control import record_checkpoint
+
+    blocked = deny_if_blocked("workspace_write")
+    if blocked:
+        return {**blocked, "path": rel_path}
+    target = resolve_under_root(rel_path)
+    if not target.parent.exists():
+        return {"ok": False, "error": "Parent folder missing.", "path": rel_path}
+    text = content if isinstance(content, str) else str(content or "")
+    before = ""
+    if target.is_file():
+        try:
+            before = target.read_text(encoding="utf-8")
+        except OSError:
+            before = ""
+    try:
+        record_checkpoint(
+            None,
+            kind="workspace_write",
+            summary=f"write {rel_path}",
+            payload={"path": rel_path, "before": before, "after": text},
+        )
+    except Exception:
+        pass
     target.write_text(text, encoding="utf-8")
     return {"ok": True, "path": rel_path}
 

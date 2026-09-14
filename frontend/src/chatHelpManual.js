@@ -11,6 +11,11 @@ export const CHAT_HELP_MANUAL_MARKDOWN = `
 | \`/compact\` | Visible summary of earlier turns (keeps the recent thread). |
 | \`/handoff\` | Export a paste-ready context dump (also copied to the clipboard). |
 | \`/stop\` | Cancel the current run. |
+| \`remember …\` | Store an exact fact (decays if unused). |
+
+## Control plane
+
+Above the composer: **Plan** (no writes), **Draft** (approve every write), **Agent** (uses Settings → Autonomy). A live token meter stops the run at the spend cap. Open tasks persist across crashes — Resume continues the remaining plan. **Steer** injects an instruction into the next specialist; **Stop** cancels the in-flight run. File writes keep checkpoints (Settings → Checkpoints). Scheduled routines honor quiet hours and can run isolated or into the current chat.
 
 ## Sending messages
 
@@ -25,9 +30,25 @@ export const CHAT_HELP_MANUAL_MARKDOWN = `
 Project rules: if a folder is linked, Ada reads \`ADA.md\`, \`AGENTS.md\`, \`CLAUDE.md\`, or \`.ada/rules.md\`.
 - Use the **+** button to attach files or toggle **Web search** (when on, your message is also used as a search query unless you use the web-search flow from the menu).
 
+## Models
+
+Settings → **Model** lists OpenAI, xAI, and local open-source weights. Ada detects GPU/NPU memory and suggests a Hugging Face GGUF (or a small transformers model). Download suggested, then pick it in the same menu.
+
 ## Chats
 
 - Open and switch conversations from the chats list; each chat keeps its own history on disk (via the backend).
+
+## Custom agents
+
+The **Agents** menu in the navbar lists Ada plus your custom agents. Hover it to switch agents. The **+** button opens a modal — describe the job, and Ada creates the agent (memory, starter skill, tools).
+
+- **Memory** — \`MEMORY.md\` (say \`remember …\` in chat to append a note)
+- **Skills** — \`SKILL.md\` playbooks (description + steps; matching skills load on a turn)
+- **Tools** — allowlist from Ada’s tool registry
+- **Knowledge** — uploadable files (small files in context; larger ones searched)
+- **Schedule** — routines that run at a time of day while the backend is up (drafts into the agent’s chat; test run from Configure)
+
+Use **Configure** on an agent to edit those. Hide/pin/duplicate from Profile. Agent chats are kept out of the general Chats menu.
 
 ## Coding mode
 
