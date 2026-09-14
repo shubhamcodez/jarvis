@@ -3007,3 +3007,135 @@
   display: flex;
   gap: 0.4rem;
 }
+
+.message-queue {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  align-items: center;
+  padding: 0.5rem 2rem 0;
+}
+
+.message-queue__label {
+  font-size: 0.7rem;
+  color: var(--text-secondary);
+  width: 100%;
+}
+
+.message-queue__item {
+  font: inherit;
+  font-size: 0.72rem;
+  padding: 0.2rem 0.5rem;
+  border-radius: 999px;
+  border: 1px solid var(--border-secondary);
+  background: var(--bg-input);
+  color: var(--text-primary);
+  cursor: pointer;
+  max-width: 100%;
+}
+
+.chat-stop-btn,
+#chat-stop {
+  flex-shrink: 0;
+  padding: 0.75rem 1.25rem;
+  border-radius: 8px;
+  border: 1px solid rgba(248, 81, 73, 0.45);
+  background: rgba(248, 81, 73, 0.88);
+  color: #fff;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+#chat-stop:hover {
+  background: #da3633;
+}
+
+.message-queue__hold {
+  font: inherit;
+  font-size: 0.72rem;
+  font-weight: 600;
+  padding: 0.2rem 0.55rem;
+  border-radius: 999px;
+  border: 1px solid var(--border-secondary);
+  background: transparent;
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.navbar-chats-search {
+  width: calc(100% - 1rem);
+  margin: 0 0.5rem 0.4rem;
+  padding: 0.35rem 0.5rem;
+  border-radius: 6px;
+  border: 1px solid var(--border-secondary);
+  background: var(--bg-input);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 0.8rem;
+}
+
+.msg-bot-actions {
+  display: flex;
+  gap: 0.4rem;
+  align-items: center;
+  margin-top: 0.25rem;
+}
+
+.msg-pin-btn {
+  border: none;
+  background: none;
+  font: inherit;
+  font-size: 0.7rem;
+  color: var(--text-secondary);
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+.activity-heading {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-secondary);
+  margin: 0.75rem 0 0.35rem;
+}
+
+.activity-block {
+  margin-bottom: 0.75rem;
+}
+
+.activity-line {
+  font-size: 0.8125rem;
+  color: var(--text-primary);
+  margin: 0.2rem 0;
+}
+
+.activity-pin {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.activity-pin__open {
+  flex: 1;
+  text-align: left;
+  border: none;
+  background: none;
+  font: inherit;
+  font-size: 0.8125rem;
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.activity-pin__del {
+  border: none;
+  background: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.app-context-footer__usage {
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  margin-right: 0.75rem;
+}

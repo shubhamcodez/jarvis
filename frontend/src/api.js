@@ -90,6 +90,7 @@ export async function sendMessageStream(
     webSearchQuery = null,
     codingMode = false,
     codingProjectSnapshot = null,
+    signal = null,
   },
 ) {
   const base = getApiBase()
@@ -97,6 +98,7 @@ export async function sendMessageStream(
     method: 'POST',
     credentials: 'include',
     headers: { 'Content-Type': 'application/json' },
+    signal,
     body: JSON.stringify({
       message: message || '',
       attachment_paths: attachmentPaths || null,
@@ -108,10 +110,18 @@ export async function sendMessageStream(
   })
   if (!res.ok) throw new Error(await res.text() || `HTTP ${res.status}`)
   const reader = res.body.getReader()
+  if (signal) {
+    const cancelReader = () => {
+      reader.cancel().catch(() => {})
+    }
+    if (signal.aborted) cancelReader()
+    else signal.addEventListener('abort', cancelReader, { once: true })
+  }
   const decoder = new TextDecoder()
   let buffer = ''
   let full = ''
   let toolUsed = null
+  try {
   while (true) {
     const { value, done } = await reader.read()
     if (done) break
@@ -155,6 +165,13 @@ export async function sendMessageStream(
   }
   if (full) onDone?.(full)
   return { reply: full, tool_used: toolUsed, file_edits: null, pending_approvals: null }
+  } catch (err) {
+    if (err?.name === 'AbortError' || signal?.aborted) {
+      const abortErr = err?.name === 'AbortError' ? err : new DOMException('Aborted', 'AbortError')
+      throw abortErr
+    }
+    throw err
+  }
 }
 
 /** Send message with file uploads (multipart). Use when user attached files. */
@@ -391,7 +408,41 @@ export async function resolveAgentApproval(approvalId, approve) {
   })
 }
 
-/** Native folder picker when running inside Tauri; otherwise null. */
+export async function searchChats(q) {
+  const query = encodeURIComponent(q || '')
+  return request(`/chat/search?q=${query}`)
+}
+
+export async function compactChat(chatId) {
+  return request('/chat/compact', {
+    method: 'POST',
+    body: JSON.stringify({ chat_id: chatId }),
+  })
+}
+
+export async function getChatHandoff(chatId) {
+  return request(`/chat/handoff/${encodeURIComponent(chatId)}`)
+}
+
+export async function listBookmarks() {
+  return request('/bookmarks')
+}
+
+export async function addBookmark(chatId, content, title = '') {
+  return request('/bookmarks', {
+    method: 'POST',
+    body: JSON.stringify({ chat_id: chatId || '', content, title }),
+  })
+}
+
+export async function deleteBookmark(id) {
+  return request(`/bookmarks/${encodeURIComponent(id)}`, { method: 'DELETE' })
+}
+
+export async function getUsageStats() {
+  return request('/observability/usage')
+}
+
 export async function pickWorkspaceFolderNative() {
   try {
     const { invoke } = await import('@tauri-apps/api/core')

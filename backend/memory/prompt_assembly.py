@@ -24,6 +24,7 @@ def build_policy_context(
     parts: list[str] = []
     if task_spec_text and task_spec_text.strip():
         parts.append("TASK SPECIFICATION (authoritative):\n" + task_spec_text.strip())
+    # project_rules passed via memory_context prefix by callers when needed
     if agent_state_text and agent_state_text.strip():
         parts.append("STRUCTURED AGENT STATE:\n" + agent_state_text.strip())
     if memory_context and memory_context.strip():

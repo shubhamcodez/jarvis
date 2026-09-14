@@ -98,13 +98,16 @@ async def _chat_node(state: RouterState) -> RouterState:
         message or "", recent_turns=recent_turns or [], web_search_query=wq
     )
     from memory.prompt_assembly import build_policy_context
+    from tools.project_rules import load_project_rules
     from .agent_state import structured_view
     from .task_spec import format_task_spec_for_prompt
 
+    rules = load_project_rules()
+    mem = ((rules + "\n\n") if rules else "") + (memory_context or "")
     system_content = build_policy_context(
         task_spec_text=format_task_spec_for_prompt(state.get("task_spec") or {}),
         agent_state_text=structured_view(state.get("agent_state") or {}),
-        memory_context=memory_context,
+        memory_context=mem,
         tool_system=tool_system or "",
         untrusted_note=bool(wq),
     ).strip() or None

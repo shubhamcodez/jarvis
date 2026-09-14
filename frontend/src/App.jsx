@@ -40,6 +40,13 @@ import {
   resolveAgentApproval,
   pickWorkspaceFolderNative,
   isDesktopShell,
+  searchChats,
+  compactChat,
+  getChatHandoff,
+  listBookmarks,
+  addBookmark,
+  deleteBookmark,
+  getUsageStats,
 } from './api'
 import {
   buildSnapshotFromDirectoryHandle,
@@ -804,6 +811,16 @@ function App() {
   const [openaiKeyDraft, setOpenaiKeyDraft] = useState('')
   const [xaiKeyDraft, setXaiKeyDraft] = useState('')
   const [workspaceDiskPath, setWorkspaceDiskPath] = useState('')
+  const [messageQueue, setMessageQueue] = useState([])
+  const [queueHeld, setQueueHeld] = useState(false)
+  const [chatSearchQ, setChatSearchQ] = useState('')
+  const [chatSearchHits, setChatSearchHits] = useState([])
+  const [bookmarks, setBookmarks] = useState([])
+  const [usageStats, setUsageStats] = useState(null)
+  const abortRef = useRef(null)
+  const sendingRef = useRef(false)
+  const messageQueueRef = useRef([])
+  const queueHeldRef = useRef(false)
 
   useEffect(() => {
     introduceWizardRef.current = introduceWizard
@@ -1138,6 +1155,23 @@ function App() {
     }
   }, [])
 
+  const refreshBookmarks = useCallback(async () => {
+    try {
+      const data = await listBookmarks()
+      setBookmarks(Array.isArray(data?.bookmarks) ? data.bookmarks : [])
+    } catch {
+      setBookmarks([])
+    }
+  }, [])
+
+  const refreshUsage = useCallback(async () => {
+    try {
+      setUsageStats(await getUsageStats())
+    } catch {
+      /* ignore */
+    }
+  }, [])
+
   const refreshPendingApprovals = useCallback(async () => {
     try {
       const data = await listPendingApprovals(currentChatId)
@@ -1183,9 +1217,14 @@ function App() {
 
   useEffect(() => {
     refreshPendingApprovals()
-    const t = setInterval(refreshPendingApprovals, 4000)
+    refreshBookmarks()
+    refreshUsage()
+    const t = setInterval(() => {
+      refreshPendingApprovals()
+      refreshUsage()
+    }, 8000)
     return () => clearInterval(t)
-  }, [refreshPendingApprovals])
+  }, [refreshPendingApprovals, refreshBookmarks, refreshUsage])
 
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', colorScheme)
@@ -1894,7 +1933,7 @@ function App() {
   }
 
   const handleSend = async (opts = {}) => {
-    const raw = input.trim()
+    const raw = (opts.text != null ? String(opts.text) : input).trim()
     const explicitWs = (opts.webSearchQuery || '').trim()
     const extraWs =
       explicitWs || (webSearchMode && raw ? raw : '')
@@ -1916,6 +1955,56 @@ function App() {
         await appendChatLog('assistant', CHAT_HELP_MANUAL_MARKDOWN)
       } catch {
         /* ignore */
+      }
+      refreshChatList()
+      return
+    }
+    if (/^\/stop\s*$/i.test(raw) && filesToSend.length === 0) {
+      setInput('')
+      abortRef.current?.abort()
+      return
+    }
+    if (/^\/compact\s*$/i.test(raw) && filesToSend.length === 0) {
+      setInput('')
+      appendMessage('/compact', true)
+      try {
+        await appendChatLog('user', '/compact')
+      } catch {
+        /* ignore */
+      }
+      try {
+        const cid = currentChatId || (await getCurrentChatId())
+        const data = await compactChat(cid)
+        const body = data?.summary || 'No summary.'
+        appendMessage(body, false)
+        await appendChatLog('assistant', body)
+      } catch (e) {
+        appendMessage(e?.message || 'Compact failed.', false)
+      }
+      refreshChatList()
+      return
+    }
+    if (/^\/handoff\s*$/i.test(raw) && filesToSend.length === 0) {
+      setInput('')
+      appendMessage('/handoff', true)
+      try {
+        await appendChatLog('user', '/handoff')
+      } catch {
+        /* ignore */
+      }
+      try {
+        const cid = currentChatId || (await getCurrentChatId())
+        const data = await getChatHandoff(cid)
+        const body = data?.markdown || 'No handoff.'
+        try {
+          await navigator.clipboard.writeText(body)
+        } catch {
+          /* ignore */
+        }
+        appendMessage(`${body}\n\n_Copied to clipboard when the browser allowed it._`, false)
+        await appendChatLog('assistant', body)
+      } catch (e) {
+        appendMessage(e?.message || 'Handoff failed.', false)
       }
       refreshChatList()
       return
@@ -1949,6 +2038,15 @@ function App() {
     if (!raw && filesToSend.length === 0 && !extraWs && !projectContextActive) {
       return
     }
+    if (sendingRef.current && !opts.fromQueue) {
+      if (raw) {
+        messageQueueRef.current = [...messageQueueRef.current, raw]
+        setMessageQueue(messageQueueRef.current)
+        setInput('')
+        setFileMention(null)
+      }
+      return
+    }
     setInput('')
     setFileMention(null)
     setAttachments([])
@@ -1966,7 +2064,10 @@ function App() {
         : `Project: ${label}`
     }
     appendMessage(displayText, true)
+    sendingRef.current = true
     setSending(true)
+    const ac = new AbortController()
+    abortRef.current = ac
     setLiveReply('')
     streamAdaStripRef.current = ''
     setStreamTimeline([])
@@ -2035,6 +2136,7 @@ function App() {
               ? ''
               : 'Please summarize or answer based on the attached documents.')
         const streamResult = await sendMessageStream(streamMsg, null, chatId, {
+            signal: ac.signal,
             webSearchQuery: extraWs.trim() || null,
             codingMode: projectContextActive,
             codingProjectSnapshot: projectContextActive ? cSnap || null : null,
@@ -2087,7 +2189,10 @@ function App() {
       setLiveReply(null)
       setStreamTimeline([])
       screenshotPendingRef.current = {}
-      const msg = err?.message || 'Sorry, something went wrong. Please try again.'
+      const aborted = err?.name === 'AbortError' || /aborted/i.test(err?.message || '')
+      const msg = aborted
+        ? 'Stopped.'
+        : err?.message || 'Sorry, something went wrong. Please try again.'
       appendMessage(msg, false)
       try {
         await appendChatLog('assistant', msg)
@@ -2095,8 +2200,18 @@ function App() {
         /* ignore */
       }
     }
+    abortRef.current = null
+    sendingRef.current = false
     setSending(false)
     refreshChatList()
+    refreshUsage()
+    const queued = messageQueueRef.current
+    if (queued.length && !queueHeldRef.current) {
+      const [next, ...rest] = queued
+      messageQueueRef.current = rest
+      setMessageQueue(rest)
+      setTimeout(() => handleSend({ text: next, fromQueue: true }), 0)
+    }
   }
 
   const handleKeyDown = (e) => {
@@ -2132,8 +2247,23 @@ function App() {
       setFileMention(null)
       return
     }
+    if (e.key === 'Tab' && sendingRef.current && input.trim()) {
+      e.preventDefault()
+      const text = input.trim()
+      messageQueueRef.current = [...messageQueueRef.current, text]
+      setMessageQueue(messageQueueRef.current)
+      setInput('')
+      return
+    }
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
+      if (sendingRef.current && input.trim()) {
+        const text = input.trim()
+        messageQueueRef.current = [...messageQueueRef.current, text]
+        setMessageQueue(messageQueueRef.current)
+        setInput('')
+        return
+      }
       handleSend({})
     }
   }
@@ -2158,7 +2288,24 @@ function App() {
                     {msg.content}
                   </ReactMarkdown>
                 </div>
-                <CopyResponseButton text={msg.content} />
+                <div className="msg-bot-actions">
+                  <CopyResponseButton text={msg.content} />
+                  <button
+                    type="button"
+                    className="msg-pin-btn"
+                    title="Pin this reply"
+                    onClick={async () => {
+                      try {
+                        await addBookmark(currentChatId || '', msg.content, (msg.content || '').slice(0, 60))
+                        refreshBookmarks()
+                      } catch (e) {
+                        alert(e?.message || 'Could not pin.')
+                      }
+                    }}
+                  >
+                    Pin
+                  </button>
+                </div>
               </div>
             )}
           </div>
@@ -2245,6 +2392,48 @@ function App() {
         </div>
       ) : null}
       <div className="chat-input-area">
+        {messageQueue.length > 0 ? (
+          <div className="message-queue" aria-label="Queued follow-ups">
+            <span className="message-queue__label">
+              {queueHeld
+                ? `Held (${messageQueue.length}) — will not auto-send`
+                : `Queued (${messageQueue.length}) — runs after this turn`}
+            </span>
+            <button
+              type="button"
+              className="message-queue__hold"
+              onClick={() => {
+                const next = !queueHeldRef.current
+                queueHeldRef.current = next
+                setQueueHeld(next)
+                if (!next && !sendingRef.current && messageQueueRef.current.length) {
+                  const [first, ...rest] = messageQueueRef.current
+                  messageQueueRef.current = rest
+                  setMessageQueue(rest)
+                  setTimeout(() => handleSend({ text: first, fromQueue: true }), 0)
+                }
+              }}
+            >
+              {queueHeld ? 'Resume' : 'Hold'}
+            </button>
+            {messageQueue.map((t, i) => (
+              <button
+                key={`${i}-${t.slice(0, 12)}`}
+                type="button"
+                className="message-queue__item"
+                title="Remove from queue"
+                onClick={() => {
+                  const next = messageQueueRef.current.filter((_, j) => j !== i)
+                  messageQueueRef.current = next
+                  setMessageQueue(next)
+                }}
+              >
+                {t.slice(0, 80)}
+                {t.length > 80 ? '…' : ''}
+              </button>
+            ))}
+          </div>
+        ) : null}
         {attachments.length > 0 && (
           <div className="chat-attachments">
             {attachments.map((f, i) => (
@@ -2372,11 +2561,13 @@ function App() {
               ref={chatInputRef}
               id="chat-input"
               placeholder={
-                codingModeEnabled && workspaceSnapshot.trim()
-                  ? 'Message Ada… @file — Ctrl+click several, Enter to insert'
-                  : webSearchMode
-                    ? 'Message Ada… (each send uses the web: top results inform the reply)'
-                    : 'Message Ada…'
+                sending
+                  ? 'Ada is working — Enter or Tab queues a follow-up'
+                  : codingModeEnabled && workspaceSnapshot.trim()
+                    ? 'Message Ada… @file — Ctrl+click several, Enter to insert'
+                    : webSearchMode
+                      ? 'Message Ada… (each send uses the web: top results inform the reply)'
+                      : 'Message Ada…'
               }
               rows={1}
               value={input}
@@ -2391,7 +2582,6 @@ function App() {
                 syncFileMentionFromCaret(e.target.value, e.target.selectionStart, 'select')
               }}
               onKeyDown={handleKeyDown}
-              disabled={sending}
               autoComplete="off"
               aria-autocomplete={fileMention ? 'list' : undefined}
               aria-controls={fileMention ? 'chat-file-mention-list' : undefined}
@@ -2400,9 +2590,20 @@ function App() {
               )}
             />
           </div>
-          <button type="button" id="chat-send" onClick={() => handleSend({})} disabled={sending}>
-            Send
-          </button>
+          {sending ? (
+            <button
+              type="button"
+              id="chat-stop"
+              className="chat-stop-btn"
+              onClick={() => abortRef.current?.abort()}
+            >
+              Stop
+            </button>
+          ) : (
+            <button type="button" id="chat-send" onClick={() => handleSend({})}>
+              Send
+            </button>
+          )}
         </div>
       </div>
     </>
@@ -2450,8 +2651,51 @@ function App() {
             <div className="navbar-chats-dropdown" role="region" aria-label="Chat history">
               <div className="navbar-chats-dropdown-inner">
                 <div className="navbar-chats-dropdown-header">Recent chats</div>
+                <input
+                  type="search"
+                  className="navbar-chats-search"
+                  placeholder="Search chats…"
+                  value={chatSearchQ}
+                  onChange={async (e) => {
+                    const v = e.target.value
+                    setChatSearchQ(v)
+                    if (!v.trim()) {
+                      setChatSearchHits([])
+                      return
+                    }
+                    try {
+                      const data = await searchChats(v.trim())
+                      setChatSearchHits(Array.isArray(data?.hits) ? data.hits : [])
+                    } catch {
+                      setChatSearchHits([])
+                    }
+                  }}
+                  aria-label="Search chats"
+                />
                 <div className="navbar-chats-list">
-                  {chats.length === 0 ? (
+                  {chatSearchHits.length > 0
+                    ? chatSearchHits.map((chat) => (
+                        <div key={chat.id} className="chat-history-item-wrap navbar-chats-item">
+                          <button
+                            type="button"
+                            className="chat-history-item"
+                            onClick={() => {
+                              selectChat(chat.id)
+                              setPanel('chats')
+                            }}
+                          >
+                            {CHAT_ICON}
+                            <span className="chat-history-title" title={chat.snippet || chat.title}>
+                              {chat.title}
+                            </span>
+                          </button>
+                        </div>
+                      ))
+                    : null}
+                  {chatSearchQ.trim() && chatSearchHits.length === 0 ? (
+                    <p className="navbar-chats-empty">No chats match that search.</p>
+                  ) : null}
+                  {chatSearchQ.trim() ? null : chats.length === 0 ? (
                     <p className="navbar-chats-empty">No conversations yet.</p>
                   ) : (
                     chats.map((chat) => (
@@ -2752,6 +2996,14 @@ function App() {
                   )}
                 </div>
                 <div className="app-context-footer__actions">
+                  {usageStats ? (
+                    <span
+                      className="app-context-footer__usage"
+                      title="Estimated tokens from recent traces"
+                    >
+                      Tokens ~ {usageStats.token_input || 0} in / {usageStats.token_output || 0} out
+                    </span>
+                  ) : null}
                   <button
                     type="button"
                     className="app-context-footer__linkish"
@@ -2781,7 +3033,62 @@ function App() {
         {panel === 'activity' ? (
           <div className="main-panel main-panel--activity">
             <div className="main-panel-inner activity-list">
-              <p className="activity-empty">No actions yet. Actions the chatbot takes will appear here.</p>
+              {messageQueue.length ? (
+                <div className="activity-block">
+                  <h3 className="activity-heading">Queued follow-ups</h3>
+                  {messageQueue.map((t, i) => (
+                    <p key={i} className="activity-line">{t}</p>
+                  ))}
+                </div>
+              ) : null}
+              {pendingApprovals.length ? (
+                <div className="activity-block">
+                  <h3 className="activity-heading">Awaiting approval</h3>
+                  {pendingApprovals.map((p) => (
+                    <p key={p.id} className="activity-line">{p.summary || p.kind}</p>
+                  ))}
+                </div>
+              ) : null}
+              <div className="activity-block">
+                <h3 className="activity-heading">Pinned replies</h3>
+                {bookmarks.length === 0 ? (
+                  <p className="activity-empty">Pin an assistant reply from chat to save it here.</p>
+                ) : (
+                  bookmarks.map((b) => (
+                    <div key={b.id} className="activity-pin">
+                      <button
+                        type="button"
+                        className="activity-pin__open"
+                        onClick={() => {
+                          if (b.chat_id) selectChat(b.chat_id)
+                          setPanel('chats')
+                        }}
+                      >
+                        {b.title || 'Pin'}
+                      </button>
+                      <button
+                        type="button"
+                        className="activity-pin__del"
+                        onClick={async () => {
+                          await deleteBookmark(b.id)
+                          refreshBookmarks()
+                        }}
+                      >
+                        ×
+                      </button>
+                    </div>
+                  ))
+                )}
+              </div>
+              {usageStats?.last?.route ? (
+                <div className="activity-block">
+                  <h3 className="activity-heading">Last run</h3>
+                  <p className="activity-line">
+                    {usageStats.last.route} · in {usageStats.last.token_input ?? '—'} / out{' '}
+                    {usageStats.last.token_output ?? '—'} tokens
+                  </p>
+                </div>
+              ) : null}
             </div>
           </div>
         ) : null}
@@ -3067,6 +3374,11 @@ function App() {
             )}
           </div>
           <div className="app-context-footer__actions">
+            {usageStats ? (
+              <span className="app-context-footer__usage" title="Estimated tokens from recent traces">
+                Tokens ~ {usageStats.token_input || 0} in / {usageStats.token_output || 0} out
+              </span>
+            ) : null}
             {codingModeEnabled ? (
               <button
                 type="button"

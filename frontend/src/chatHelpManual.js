@@ -8,11 +8,21 @@ export const CHAT_HELP_MANUAL_MARKDOWN = `
 | -------- | ------ |
 | \`/introduce\` or \`/introduce/\` | Step‑through questionnaire that fills **user profile** (saved as JSON on the server). Does not call the assistant. |
 | \`/help\` | Show this manual (stored in your chat log; does not call the assistant). |
+| \`/compact\` | Visible summary of earlier turns (keeps the recent thread). |
+| \`/handoff\` | Export a paste-ready context dump (also copied to the clipboard). |
+| \`/stop\` | Cancel the current run. |
 
 ## Sending messages
 
-- **Enter** — Send the message.
+- **Enter** — Send. While Ada is working, Enter **queues** the follow-up (does not kill the run).
+- **Tab** while a run is active — Queue the composer (Codex-style deferred follow-up).
+- **Hold / Resume** on the queue — Keep follow-ups visible without auto-sending (review first).
+- **Stop** — Abort the current stream. The queue stays unless you remove items.
 - **Shift+Enter** — New line in the composer.
+- **Pin** on a reply — Save it in Activity.
+- Search chats from the Chats menu.
+
+Project rules: if a folder is linked, Ada reads \`ADA.md\`, \`AGENTS.md\`, \`CLAUDE.md\`, or \`.ada/rules.md\`.
 - Use the **+** button to attach files or toggle **Web search** (when on, your message is also used as a search query unless you use the web-search flow from the menu).
 
 ## Chats

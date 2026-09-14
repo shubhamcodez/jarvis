@@ -216,20 +216,24 @@ class ChatbotResponseRequest(BaseModel):
 
 
 def _prepare_coding_project_context(coding_mode: bool, snapshot: Optional[str] = None) -> str:
-    if not coding_mode:
-        return ""
-    text = (snapshot or "").strip()
-    if text:
-        return text
-    try:
-        from tools.workspace_io import snapshot as ws_snapshot
+    from tools.project_rules import load_project_rules
 
-        built = ws_snapshot()
-        if built.get("ok"):
-            return (built.get("snapshot") or "").strip()
-    except Exception:
-        pass
-    return ""
+    rules = load_project_rules()
+    text = ""
+    if coding_mode:
+        text = (snapshot or "").strip()
+        if not text:
+            try:
+                from tools.workspace_io import snapshot as ws_snapshot
+
+                built = ws_snapshot()
+                if built.get("ok"):
+                    text = (built.get("snapshot") or "").strip()
+            except Exception:
+                pass
+    if rules and text:
+        return rules + "\n\n" + text
+    return rules or text
 
 
 class AppendChatLogRequest(BaseModel):
@@ -986,6 +990,75 @@ async def api_new_chat():
 @app.get("/chat/list")
 async def api_list_chats():
     return list_chats()
+
+
+@app.get("/chat/search")
+async def api_search_chats(q: str = Query("", min_length=0), limit: int = 30):
+    from memory.chat_search import search_chats
+
+    return {"hits": search_chats(q, limit=limit)}
+
+
+@app.post("/chat/compact")
+async def api_compact_chat(body: SetCurrentChatRequest):
+    from memory.chat_search import extractive_compact
+
+    return {"ok": True, "summary": extractive_compact(body.chat_id)}
+
+
+@app.get("/chat/handoff/{chat_id}")
+async def api_handoff(chat_id: str):
+    from memory.chat_search import handoff_markdown
+    from agents.agent_state import load_state, structured_view
+
+    extra = structured_view(load_state(chat_id))
+    return {"ok": True, "markdown": handoff_markdown(chat_id, extra)}
+
+
+@app.get("/bookmarks")
+async def api_list_bookmarks():
+    from memory.bookmarks import list_bookmarks
+
+    return {"bookmarks": list_bookmarks()}
+
+
+class BookmarkAddRequest(BaseModel):
+    chat_id: str = ""
+    content: str
+    title: str = ""
+
+
+@app.post("/bookmarks")
+async def api_add_bookmark(body: BookmarkAddRequest):
+    from memory.bookmarks import add_bookmark
+
+    return add_bookmark(body.chat_id, body.content, body.title)
+
+
+@app.delete("/bookmarks/{bookmark_id}")
+async def api_delete_bookmark(bookmark_id: str):
+    from memory.bookmarks import remove_bookmark
+
+    return {"ok": remove_bookmark(bookmark_id)}
+
+
+@app.get("/observability/usage")
+async def api_usage():
+    traces = list_traces(limit=80)
+    tin = sum(int(t.get("token_input") or 0) for t in traces)
+    tout = sum(int(t.get("token_output") or 0) for t in traces)
+    last = traces[-1] if traces else {}
+    return {
+        "recent_runs": len(traces),
+        "token_input": tin,
+        "token_output": tout,
+        "last": {
+            "route": last.get("route"),
+            "token_input": last.get("token_input"),
+            "token_output": last.get("token_output"),
+            "duration_sec": last.get("duration_sec"),
+        },
+    }
 
 
 @app.post("/chat/set-current")
