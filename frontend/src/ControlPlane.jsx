@@ -1,3 +1,101 @@
+import { useEffect, useRef, useState } from 'react'
+
+const ICON_AGENT = (
+  <svg className="mode-menu__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden>
+    <path d="M8 8a4 4 0 1 1 0 8H5a3 3 0 0 1 0-6h10a3 3 0 1 0 0-6H8" strokeLinecap="round" />
+  </svg>
+)
+
+const ICON_PLAN = (
+  <svg className="mode-menu__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden>
+    <path d="M8 6h12M8 12h12M8 18h12" strokeLinecap="round" />
+    <circle cx="4" cy="6" r="1.2" fill="currentColor" stroke="none" />
+    <circle cx="4" cy="12" r="1.2" fill="currentColor" stroke="none" />
+    <circle cx="4" cy="18" r="1.2" fill="currentColor" stroke="none" />
+  </svg>
+)
+
+const ICON_DRAFT = (
+  <svg className="mode-menu__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden>
+    <path d="M14 4H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V9z" />
+    <path d="M14 4v5h5" />
+  </svg>
+)
+
+const ICON_CHECK = (
+  <svg className="mode-menu__check" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" aria-hidden>
+    <path d="M5 12.5l4.2 4.2L19 7.5" strokeLinecap="round" strokeLinejoin="round" />
+  </svg>
+)
+
+const ICON_CHEVRON = (
+  <svg className="mode-menu__chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden>
+    <path d="M6 9l6 6 6-6" strokeLinecap="round" strokeLinejoin="round" />
+  </svg>
+)
+
+const MODES = [
+  { id: 'agent', label: 'Agent', icon: ICON_AGENT },
+  { id: 'plan', label: 'Plan', icon: ICON_PLAN },
+  { id: 'draft', label: 'Draft', icon: ICON_DRAFT },
+]
+
+export function ModeMenu({ runMode, onRunMode }) {
+  const [open, setOpen] = useState(false)
+  const wrapRef = useRef(null)
+  const current = MODES.find((m) => m.id === runMode) || MODES[0]
+
+  useEffect(() => {
+    if (!open) return undefined
+    const onDoc = (e) => {
+      if (wrapRef.current && !wrapRef.current.contains(e.target)) setOpen(false)
+    }
+    document.addEventListener('mousedown', onDoc)
+    return () => document.removeEventListener('mousedown', onDoc)
+  }, [open])
+
+  return (
+    <div className="mode-menu" ref={wrapRef}>
+      <button
+        type="button"
+        className="mode-menu__trigger"
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        aria-label={`Run mode: ${current.label}`}
+        onClick={() => setOpen((v) => !v)}
+      >
+        {current.icon}
+        <span>{current.label}</span>
+        {ICON_CHEVRON}
+      </button>
+      {open ? (
+        <div className="mode-menu__pop" role="listbox" aria-label="Run mode">
+          {MODES.map((m) => {
+            const on = m.id === current.id
+            return (
+              <button
+                key={m.id}
+                type="button"
+                role="option"
+                aria-selected={on}
+                className={`mode-menu__item${on ? ' mode-menu__item--on' : ''}`}
+                onClick={() => {
+                  onRunMode?.(m.id)
+                  setOpen(false)
+                }}
+              >
+                {m.icon}
+                <span>{m.label}</span>
+                {on ? ICON_CHECK : null}
+              </button>
+            )
+          })}
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
 export function ControlPlane({
   runMode,
   onRunMode,
@@ -17,23 +115,13 @@ export function ControlPlane({
     ['pending', 'active', 'blocked', 'waiting_approval', 'paused', 'error'].includes(t.status),
   )
   const liveRuns = runs || []
+  const showStrip = used > 0 || liveRuns.length > 0 || openTasks.length > 0
+
+  if (!showStrip) return null
 
   return (
     <div className="control-plane" role="region" aria-label="Run control">
       <div className="control-plane__row">
-        <div className="control-plane__modes" role="group" aria-label="Run mode">
-          {['plan', 'draft', 'agent'].map((m) => (
-            <button
-              key={m}
-              type="button"
-              className={`control-plane__mode${runMode === m ? ' control-plane__mode--on' : ''}`}
-              onClick={() => onRunMode?.(m)}
-              aria-pressed={runMode === m}
-            >
-              {m === 'plan' ? 'Plan' : m === 'draft' ? 'Draft' : 'Agent'}
-            </button>
-          ))}
-        </div>
         <div className="control-plane__meter" title={`${used} / ${cap} tokens this run`}>
           <span className="control-plane__meter-label">
             {used} / {cap} tok

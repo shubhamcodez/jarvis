@@ -71,7 +71,7 @@ import {
 } from './api'
 import { CustomAgentEditor } from './CustomAgentEditor'
 import { CreateAgentModal } from './CreateAgentModal'
-import { ControlPlane } from './ControlPlane'
+import { ControlPlane, ModeMenu } from './ControlPlane'
 import {
   buildSnapshotFromDirectoryHandle,
   buildSnapshotFromFileList,
@@ -2628,15 +2628,6 @@ function App() {
         <div ref={messagesEndRef} />
       </div>
       <ControlPlane
-        runMode={runMode}
-        onRunMode={async (m) => {
-          try {
-            await setRunMode(m)
-            setRunModeState(m)
-          } catch (e) {
-            alert(e?.message || 'Could not change run mode.')
-          }
-        }}
         liveUsage={liveUsage || { tokens_used: 0, max_tokens: spendLimits.max_tokens_per_run }}
         tasks={controlTasks}
         runs={activeRuns}
@@ -2755,6 +2746,17 @@ function App() {
           </div>
         )}
         <div className="chat-input-row">
+          <ModeMenu
+            runMode={runMode}
+            onRunMode={async (m) => {
+              try {
+                await setRunMode(m)
+                setRunModeState(m)
+              } catch (e) {
+                alert(e?.message || 'Could not change run mode.')
+              }
+            }}
+          />
           <div className="chat-add-wrap" ref={addMenuRef}>
             <button
               type="button"
