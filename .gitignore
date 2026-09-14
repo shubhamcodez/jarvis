@@ -9,6 +9,8 @@ backend/__pycache__/
 
 # Build output
 dist/
+backend/build/
+src-tauri/target/
 *.exe
 *.dmg
 *.AppImage

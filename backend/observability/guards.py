@@ -4,7 +4,7 @@ Used inside the desktop agent loop to break early and avoid runaway.
 """
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any, Optional  # noqa: I001
 
 
 def check_loop_corruption(
@@ -47,3 +47,17 @@ def should_stop_streak(
     if current_thought and thoughts.count(current_thought) >= streak_limit:
         return True
     return True  # same action N times → stop
+
+
+def action_signature(tool: str, args: Any = None) -> str:
+    """Stable signature for progress detection (tool + bounded args)."""
+    raw = f"{tool}|{args}"
+    return raw[:240]
+
+
+def should_force_replan(signatures: list[str], repeat_limit: int = 3) -> bool:
+    """True when the same action signature repeats without new information."""
+    if not signatures or len(signatures) < repeat_limit:
+        return False
+    tail = signatures[-repeat_limit:]
+    return len(set(tail)) == 1 and bool(tail[0])

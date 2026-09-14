@@ -27,13 +27,23 @@ def _getenv(*keys: str) -> str:
 
 
 def is_shell_enabled() -> bool:
-    """Default True. Set ADA_DISABLE_SHELL=1 or ADA_ENABLE_SHELL=0 to disable."""
+    """On in repo/dev; off in packaged installs unless ADA_ENABLE_SHELL=1."""
     d = _getenv("ADA_DISABLE_SHELL", "JARVIS_DISABLE_SHELL").strip().lower()
     if d in ("1", "true", "yes", "on"):
         return False
     v = _getenv("ADA_ENABLE_SHELL", "JARVIS_ENABLE_SHELL").strip().lower()
     if v in ("0", "false", "no", "off", "disabled"):
         return False
+    if v in ("1", "true", "yes", "on"):
+        return True
+    try:
+        from config import is_packaged
+
+        if is_packaged():
+            return False
+    except Exception:
+        if os.environ.get("ADA_PACKAGED", "").strip().lower() in ("1", "true", "yes", "on"):
+            return False
     return True
 
 

@@ -1,8 +1,20 @@
 """Paths for observability data (traces, evals, optimization)."""
+import os
 from pathlib import Path
 
-# Project root (parent of backend)
-_ROOT = Path(__file__).resolve().parent.parent.parent
+
+def _root() -> Path:
+    env = (os.environ.get("ADA_DATA_DIR") or "").strip()
+    if env:
+        return Path(env)
+    if os.environ.get("ADA_PACKAGED", "").strip().lower() in ("1", "true", "yes", "on"):
+        appdata = os.environ.get("APPDATA")
+        if appdata:
+            return Path(appdata) / "Ada"
+    return Path(__file__).resolve().parent.parent.parent
+
+
+_ROOT = _root()
 _ADA_OBS = _ROOT / "ada-observability"
 _JARVIS_OBS = _ROOT / "jarvis-observability"
 if _ADA_OBS.exists():

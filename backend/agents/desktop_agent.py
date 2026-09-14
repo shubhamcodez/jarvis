@@ -140,7 +140,14 @@ def run_desktop_agent(
         from config import get_llm_api_key
         api_key = get_llm_api_key()
 
+    from agents.hitl import require_desktop_armed
     from agents.planning import evaluate_step_outcome, get_plan
+
+    armed_err = require_desktop_armed()
+    if armed_err:
+        if on_step:
+            on_step(0, armed_err, "permission", armed_err, None, True, screenshot_base64=None)
+        return armed_err
 
     client = get_llm_client(provider)
     trace = []

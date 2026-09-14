@@ -26,6 +26,20 @@ import {
   runHostShellCommand,
   getUserProfile,
   saveUserProfile,
+  getRuntimeSettings,
+  setAutonomyLevel,
+  setDesktopArmed,
+  saveApiKeys,
+  getWorkspaceStatus,
+  linkWorkspace,
+  unlinkWorkspace,
+  fetchWorkspaceSnapshot,
+  readWorkspaceFile,
+  writeWorkspaceFile,
+  listPendingApprovals,
+  resolveAgentApproval,
+  pickWorkspaceFolderNative,
+  isDesktopShell,
 } from './api'
 import {
   buildSnapshotFromDirectoryHandle,
@@ -783,6 +797,13 @@ function App() {
   const [workspaceUndoUi, setWorkspaceUndoUi] = useState({ canUndo: false, canRedo: false })
   const [introduceWizard, setIntroduceWizard] = useState(null)
   const introduceWizardRef = useRef(null)
+  const [pendingApprovals, setPendingApprovals] = useState([])
+  const [autonomyLevel, setAutonomyLevelState] = useState('gated')
+  const [desktopArmed, setDesktopArmedState] = useState(false)
+  const [keysStatus, setKeysStatus] = useState({ openai_set: false, xai_set: false })
+  const [openaiKeyDraft, setOpenaiKeyDraft] = useState('')
+  const [xaiKeyDraft, setXaiKeyDraft] = useState('')
+  const [workspaceDiskPath, setWorkspaceDiskPath] = useState('')
 
   useEffect(() => {
     introduceWizardRef.current = introduceWizard
@@ -1100,11 +1121,38 @@ function App() {
     }
   }, [])
 
+  const refreshRuntime = useCallback(async () => {
+    try {
+      const rt = await getRuntimeSettings()
+      if (rt?.autonomy) setAutonomyLevelState(rt.autonomy)
+      setDesktopArmedState(!!rt?.desktop_armed)
+      if (rt?.keys) setKeysStatus(rt.keys)
+    } catch {
+      /* ignore */
+    }
+    try {
+      const ws = await getWorkspaceStatus()
+      setWorkspaceDiskPath(ws?.linked ? ws.path || '' : '')
+    } catch {
+      /* ignore */
+    }
+  }, [])
+
+  const refreshPendingApprovals = useCallback(async () => {
+    try {
+      const data = await listPendingApprovals(currentChatId)
+      setPendingApprovals(Array.isArray(data?.pending) ? data.pending : [])
+    } catch {
+      setPendingApprovals([])
+    }
+  }, [currentChatId])
+
   const refreshSettings = useCallback(async () => {
     await refreshStoragePath()
     await refreshModelSetting()
     await refreshGoogleAuth()
-  }, [refreshStoragePath, refreshModelSetting, refreshGoogleAuth])
+    await refreshRuntime()
+  }, [refreshStoragePath, refreshModelSetting, refreshGoogleAuth, refreshRuntime])
 
   const selectChat = useCallback(async (chatId) => {
     try {
@@ -1132,6 +1180,12 @@ function App() {
   useEffect(() => {
     if (panel === 'settings') refreshSettings()
   }, [panel, refreshSettings])
+
+  useEffect(() => {
+    refreshPendingApprovals()
+    const t = setInterval(refreshPendingApprovals, 4000)
+    return () => clearInterval(t)
+  }, [refreshPendingApprovals])
 
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', colorScheme)
@@ -1177,6 +1231,12 @@ function App() {
   }, [codingModeEnabled, workspaceLocalLabel])
 
   const resolveWorkspaceFileBase = useCallback(async (relPath) => {
+    try {
+      const disk = await readWorkspaceFile(relPath)
+      if (disk?.ok && disk.content) return disk.content
+    } catch {
+      /* fall through to browser handle / cache */
+    }
     let h = projectRootHandleRef.current
     if (!h) {
       try {
@@ -1217,6 +1277,20 @@ function App() {
         }
       }
       const str = typeof text === 'string' ? text : String(text ?? '')
+      try {
+        const disk = await writeWorkspaceFile(relPath, str)
+        if (disk?.ok) {
+          setFilePreview((p) => (p && p.relPath === relPath ? { ...p, body: str, source: 'disk' } : p))
+          const wl = workspaceLocalLabel.trim()
+          if (!skipUndoRecord && wl && beforeSnapshot !== str) {
+            void pushWorkspaceEdit(wl, relPath, beforeSnapshot, str)
+            setWorkspaceUndoTick((t) => t + 1)
+          }
+          return { ok: true }
+        }
+      } catch {
+        /* fall through */
+      }
       let h = projectRootHandleRef.current
       if (!h) {
         try {
@@ -1588,6 +1662,8 @@ function App() {
     }
     projectRootHandleRef.current = null
     clearProjectRootHandleRecord().catch(() => {})
+    unlinkWorkspace().catch(() => {})
+    setWorkspaceDiskPath('')
     setFilePreview(null)
     setPendingWorkspaceEdits(null)
     setWorkspaceLocalLabel('')
@@ -1629,6 +1705,49 @@ function App() {
 
   const pickLocalProjectFolder = async () => {
     if (!codingModeEnabled) return
+    const nativePath = await pickWorkspaceFolderNative()
+    if (nativePath) {
+      setProjectImportBusy(true)
+      try {
+        const linked = await linkWorkspace(nativePath)
+        if (!linked?.ok) {
+          alert(linked?.error || 'Could not link that folder.')
+          return
+        }
+        const snap = await fetchWorkspaceSnapshot()
+        if (snap?.ok && snap.snapshot) {
+          persistLocalProject(snap.label || linked.label || 'project', snap.snapshot, snap.rel_paths || [])
+          setWorkspaceDiskPath(snap.path || nativePath)
+        }
+      } catch (e) {
+        alert(e?.message || 'Could not open that folder.')
+      } finally {
+        setProjectImportBusy(false)
+      }
+      return
+    }
+    if (isDesktopShell()) return
+    const typed = window.prompt('Folder path on this computer (or cancel to use the browser picker):', workspaceDiskPath || '')
+    if (typed && typed.trim()) {
+      setProjectImportBusy(true)
+      try {
+        const linked = await linkWorkspace(typed.trim())
+        if (!linked?.ok) {
+          alert(linked?.error || 'Could not link that folder.')
+          return
+        }
+        const snap = await fetchWorkspaceSnapshot()
+        if (snap?.ok && snap.snapshot) {
+          persistLocalProject(snap.label || linked.label || 'project', snap.snapshot, snap.rel_paths || [])
+          setWorkspaceDiskPath(snap.path || typed.trim())
+        }
+      } catch (e) {
+        alert(e?.message || 'Could not open that folder.')
+      } finally {
+        setProjectImportBusy(false)
+      }
+      return
+    }
     if (canUseDirectoryPicker()) {
       try {
         const handle = await window.showDirectoryPicker()
@@ -1954,6 +2073,11 @@ function App() {
         if (streamResult?.file_edits?.length) {
           setPendingWorkspaceEdits({ id: Date.now(), files: streamResult.file_edits })
         }
+        if (streamResult?.pending_approvals?.length) {
+          setPendingApprovals(streamResult.pending_approvals)
+        } else {
+          refreshPendingApprovals()
+        }
         appendMessage(reply || '', false)
         await appendChatLog('assistant', reply || '')
       }
@@ -2088,6 +2212,38 @@ function App() {
         )}
         <div ref={messagesEndRef} />
       </div>
+      {pendingApprovals.length > 0 ? (
+        <div className="hitl-stack" role="region" aria-label="Pending approvals">
+          {pendingApprovals.map((p) => (
+            <div key={p.id} className="hitl-card">
+              <div className="hitl-card__head">Needs your approval</div>
+              <p className="hitl-card__summary">{p.summary || p.kind}</p>
+              <div className="hitl-card__actions">
+                <button
+                  type="button"
+                  className="workspace-file-review__btn workspace-file-review__btn--accent"
+                  onClick={async () => {
+                    await resolveAgentApproval(p.id, true)
+                    refreshPendingApprovals()
+                  }}
+                >
+                  Confirm
+                </button>
+                <button
+                  type="button"
+                  className="workspace-file-review__btn workspace-file-review__btn--ghost"
+                  onClick={async () => {
+                    await resolveAgentApproval(p.id, false)
+                    refreshPendingApprovals()
+                  }}
+                >
+                  Deny
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : null}
       <div className="chat-input-area">
         {attachments.length > 0 && (
           <div className="chat-attachments">
@@ -2380,7 +2536,7 @@ function App() {
                 <h2 className="repo-context-card__title">Project context</h2>
               </div>
               <p className="repo-context-card__subtitle">
-                Open a folder from your computer. Files are read in the browser and an index is sent to the model.
+                Open a folder on this computer. Desktop Ada uses the real path (allowlisted); the browser still builds a local index.
               </p>
               <input
                 ref={projectFolderInputRef}
@@ -2415,7 +2571,9 @@ function App() {
                       <div className="repo-context-linked__meta">
                         <span className="repo-context-linked__name">{workspaceDisplayLabel() || 'Project'}</span>
                         <span className="repo-context-linked__path">
-                          Index from this browser — folder read locally, not on the server disk.
+                          {workspaceDiskPath
+                            ? workspaceDiskPath
+                            : 'Index from this browser — folder read locally.'}
                         </span>
                       </div>
                       <div className="repo-context-linked__actions">
@@ -2697,16 +2855,117 @@ function App() {
               </div>
               <div className="settings-section">
                 <label className="settings-label">Model</label>
-                <p className="settings-description">LLM used for chat and agents.</p>
+                <p className="settings-description">LLM used for chat and agents. Routing uses a smaller model.</p>
                 <select
                   className="settings-model-select"
                   value={modelProvider}
                   onChange={handleModelChange}
                   aria-label="Model provider"
                 >
-                  <option value="openai">OpenAI (GPT-4o)</option>
+                  <option value="openai">OpenAI (GPT)</option>
                   <option value="xai">xAI (Grok)</option>
                 </select>
+              </div>
+              <div className="settings-section">
+                <label className="settings-label">API keys</label>
+                <p className="settings-description">
+                  Stored in your user data folder, never in the installer.
+                  {keysStatus.openai_set ? ' OpenAI is set.' : ' OpenAI is not set.'}
+                  {keysStatus.xai_set ? ' xAI is set.' : ' xAI is not set.'}
+                </p>
+                <input
+                  type="password"
+                  className="settings-storage-input"
+                  placeholder="OpenAI API key"
+                  value={openaiKeyDraft}
+                  onChange={(e) => setOpenaiKeyDraft(e.target.value)}
+                  autoComplete="off"
+                />
+                <input
+                  type="password"
+                  className="settings-storage-input"
+                  placeholder="xAI API key"
+                  value={xaiKeyDraft}
+                  onChange={(e) => setXaiKeyDraft(e.target.value)}
+                  autoComplete="off"
+                  style={{ marginTop: '0.4rem' }}
+                />
+                <button
+                  type="button"
+                  className="settings-storage-btn"
+                  style={{ marginTop: '0.5rem' }}
+                  onClick={async () => {
+                    try {
+                      const st = await saveApiKeys({
+                        openaiApiKey: openaiKeyDraft || undefined,
+                        xaiApiKey: xaiKeyDraft || undefined,
+                      })
+                      setKeysStatus(st)
+                      setOpenaiKeyDraft('')
+                      setXaiKeyDraft('')
+                    } catch (e) {
+                      alert(e?.message || 'Could not save keys.')
+                    }
+                  }}
+                >
+                  Save keys
+                </button>
+              </div>
+              <div className="settings-section">
+                <label className="settings-label">Autonomy</label>
+                <p className="settings-description">
+                  How much Ada may execute without asking. High-impact writes (email, delete, shell, GUI) stay gated by default.
+                </p>
+                <select
+                  className="settings-model-select"
+                  value={autonomyLevel}
+                  onChange={async (e) => {
+                    const v = e.target.value
+                    try {
+                      await setAutonomyLevel(v)
+                      setAutonomyLevelState(v)
+                    } catch (err) {
+                      alert(err?.message || 'Could not save autonomy.')
+                    }
+                  }}
+                  aria-label="Autonomy level"
+                >
+                  <option value="recommend">Recommend only</option>
+                  <option value="draft">Draft, you execute</option>
+                  <option value="low_risk_auto">Low-risk auto (reads)</option>
+                  <option value="gated">Gated writes (recommended)</option>
+                  <option value="limited_auto">Limited auto</option>
+                </select>
+              </div>
+              <div className="settings-section">
+                <label className="settings-label">Desktop GUI control</label>
+                <p className="settings-description">
+                  The desktop agent can move the mouse and type. It stays off until you arm it for this machine.
+                </p>
+                <div className="settings-theme-switch" role="group" aria-label="Desktop armed">
+                  <button
+                    type="button"
+                    className={`settings-theme-option${desktopArmed ? ' settings-theme-option--active' : ''}`}
+                    onClick={async () => {
+                      await setDesktopArmed(true)
+                      setDesktopArmedState(true)
+                    }}
+                    aria-pressed={desktopArmed}
+                  >
+                    Armed
+                  </button>
+                  <button
+                    type="button"
+                    className={`settings-theme-option${!desktopArmed ? ' settings-theme-option--active' : ''}`}
+                    onClick={async () => {
+                      await setDesktopArmed(false)
+                      setDesktopArmedState(false)
+                    }}
+                    aria-pressed={!desktopArmed}
+                  >
+                    Off
+                  </button>
+                </div>
               </div>
               <div className="settings-section">
                 <label className="settings-label">Google Calendar + Gmail</label>
@@ -2799,8 +3058,8 @@ function App() {
                   {REPO_FOLDER_ICON}
                   <span className="app-context-footer__badge-text">{workspaceDisplayLabel()}</span>
                 </span>
-                <span className="app-context-footer__path" title="Browser-built index">
-                  Local folder (browser index)
+                <span className="app-context-footer__path" title={workspaceDiskPath || 'Browser-built index'}>
+                  {workspaceDiskPath ? 'Linked folder' : 'Local folder (browser index)'}
                 </span>
               </>
             ) : (

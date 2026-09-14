@@ -1,0 +1,163 @@
+use std::io::{BufRead, BufReader};
+use std::path::PathBuf;
+use std::process::{Child, Command, Stdio};
+use std::sync::Mutex;
+use std::thread;
+use std::time::{Duration, Instant};
+
+use tauri::Manager;
+
+struct BackendChild(Mutex<Option<Child>>);
+
+fn repo_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| PathBuf::from("."))
+}
+
+fn spawn_dev_backend() -> std::io::Result<Child> {
+    let backend = repo_root().join("backend");
+    let mut cmd = Command::new("poetry");
+    cmd.current_dir(&backend)
+        .args([
+            "run",
+            "python",
+            "-m",
+            "uvicorn",
+            "main:app",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            "8000",
+        ])
+        .env("ADA_PACKAGED", "0")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    cmd.spawn()
+}
+
+fn sidecar_exe(app: &tauri::AppHandle) -> Option<PathBuf> {
+    if let Ok(res) = app.path().resource_dir() {
+        let candidates = [
+            res.join("ada-backend.exe"),
+            res.join("binaries").join("ada-backend.exe"),
+            res.join("ada-backend"),
+        ];
+        for c in candidates {
+            if c.exists() {
+                return Some(c);
+            }
+        }
+    }
+    if let Ok(exe) = app.path().executable_dir() {
+        let c = exe.join("ada-backend.exe");
+        if c.exists() {
+            return Some(c);
+        }
+    }
+    None
+}
+
+fn spawn_packaged_backend(app: &tauri::AppHandle) -> std::io::Result<Child> {
+    let exe = sidecar_exe(app).ok_or_else(|| {
+        std::io::Error::new(std::io::ErrorKind::NotFound, "ada-backend sidecar not found")
+    })?;
+    let mut cmd = Command::new(exe);
+    cmd.env("ADA_PACKAGED", "1")
+        .env("PORT", "8000")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    cmd.spawn()
+}
+
+fn wait_for_health(timeout: Duration) -> bool {
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        if let Ok(resp) = std::net::TcpStream::connect_timeout(
+            &"127.0.0.1:8000".parse().unwrap(),
+            Duration::from_millis(250),
+        ) {
+            drop(resp);
+            return true;
+        }
+        thread::sleep(Duration::from_millis(200));
+    }
+    false
+}
+
+fn pipe_child_logs(child: &mut Child) {
+    if let Some(out) = child.stdout.take() {
+        thread::spawn(move || {
+            let reader = BufReader::new(out);
+            for line in reader.lines().flatten() {
+                eprintln!("[ada-backend] {line}");
+            }
+        });
+    }
+    if let Some(err) = child.stderr.take() {
+        thread::spawn(move || {
+            let reader = BufReader::new(err);
+            for line in reader.lines().flatten() {
+                eprintln!("[ada-backend] {line}");
+            }
+        });
+    }
+}
+
+#[tauri::command]
+fn pick_workspace_folder() -> Option<String> {
+    rfd::FileDialog::new()
+        .set_title("Open project folder")
+        .pick_folder()
+        .map(|p| p.to_string_lossy().to_string())
+}
+
+#[tauri::command]
+fn backend_health_hint() -> String {
+    "http://127.0.0.1:8000/health".into()
+}
+
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
+pub fn run() {
+    tauri::Builder::default()
+        .manage(BackendChild(Mutex::new(None)))
+        .invoke_handler(tauri::generate_handler![
+            pick_workspace_folder,
+            backend_health_hint
+        ])
+        .setup(|app| {
+            let handle = app.handle().clone();
+            let child_state = app.state::<BackendChild>();
+            let spawned = if cfg!(debug_assertions) {
+                spawn_dev_backend()
+            } else {
+                spawn_packaged_backend(&handle)
+            };
+            match spawned {
+                Ok(mut child) => {
+                    pipe_child_logs(&mut child);
+                    *child_state.0.lock().unwrap() = Some(child);
+                    let _ = wait_for_health(Duration::from_secs(45));
+                }
+                Err(e) => {
+                    eprintln!("Failed to start Ada backend: {e}");
+                }
+            }
+            Ok(())
+        })
+        .build(tauri::generate_context!())
+        .expect("error while building Ada")
+        .run(|app, event| {
+            if let tauri::RunEvent::Exit = event {
+                if let Some(state) = app.try_state::<BackendChild>() {
+                    if let Ok(mut guard) = state.0.lock() {
+                        if let Some(mut child) = guard.take() {
+                            let _ = child.kill();
+                            let _ = child.wait();
+                        }
+                    }
+                }
+            }
+        });
+}

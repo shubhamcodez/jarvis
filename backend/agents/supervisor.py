@@ -499,9 +499,11 @@ def supervisor_decision(
     if hinted_google:
         return hinted_google
 
+    from config import get_routing_model
+
     mod = get_llm_client(provider)
     client = mod._client(api_key)
-    model = getattr(mod, "CHAT_MODEL", "gpt-4o")
+    model = get_routing_model(provider) or getattr(mod, "CHAT_MODEL", "gpt-4o")
     resp = client.chat.completions.create(
         model=model,
         messages=[

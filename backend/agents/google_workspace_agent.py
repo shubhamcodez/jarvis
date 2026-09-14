@@ -86,6 +86,7 @@ def run_google_workspace_agent(
     on_step: Optional[Callable] = None,
     api_key: Optional[str] = None,
     provider: str = "openai",
+    chat_id: Optional[str] = None,
 ) -> tuple[str, dict]:
     """
     Plan Calendar/Gmail ops → execute with user OAuth token → LLM summary.
@@ -153,7 +154,12 @@ def run_google_workspace_agent(
                 screenshot_base64=None,
             )
         step_n += 1
-        out = run_google_op(token, op, args)
+        from agents.hitl import maybe_gate_google
+
+        def _exec(token=token, op=op, args=args):
+            return run_google_op(token, op, args)
+
+        out = maybe_gate_google(op, args, chat_id=chat_id, execute=_exec)
         results.append({"op": op, "args": args, "result": out})
         if on_step:
             on_step(

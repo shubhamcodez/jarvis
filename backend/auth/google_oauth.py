@@ -40,10 +40,23 @@ def _now() -> int:
     return int(time.time())
 
 
+def _is_packaged() -> bool:
+    if getattr(__import__("sys"), "frozen", False):
+        return True
+    return os.environ.get("ADA_PACKAGED", "").strip().lower() in ("1", "true", "yes", "on")
+
+
 def _store_path() -> Path:
     raw = (os.environ.get("GOOGLE_OAUTH_STORE_PATH") or "").strip()
     if raw:
         return Path(raw).expanduser()
+    if _is_packaged():
+        appdata = os.environ.get("ADA_DATA_DIR") or os.environ.get("APPDATA")
+        if appdata:
+            p = Path(appdata)
+            if p.name.lower() != "ada":
+                p = p / "Ada"
+            return p / ".secrets" / "google-oauth-store.json"
     return _DEFAULT_STORE_PATH
 
 
@@ -56,18 +69,25 @@ def _cookie_secure() -> bool:
 
 
 def _frontend_base_url() -> str:
-    return (
+    env = (
         os.environ.get("GOOGLE_OAUTH_FRONTEND_URL")
         or os.environ.get("FRONTEND_URL")
-        or "http://localhost:5173"
+        or ""
     ).strip().rstrip("/")
+    if env:
+        return env
+    if _is_packaged():
+        return "https://tauri.localhost"
+    return "http://localhost:5173"
 
 
 def _redirect_uri() -> str:
-    return (
-        os.environ.get("GOOGLE_OAUTH_REDIRECT_URI")
-        or "http://localhost:5173/api/auth/google/callback"
-    ).strip()
+    env = (os.environ.get("GOOGLE_OAUTH_REDIRECT_URI") or "").strip()
+    if env:
+        return env
+    if _is_packaged():
+        return "http://127.0.0.1:8000/auth/google/callback"
+    return "http://localhost:5173/api/auth/google/callback"
 
 
 def _client_id() -> str:

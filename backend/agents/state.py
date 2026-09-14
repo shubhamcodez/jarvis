@@ -23,3 +23,8 @@ class RouterState(TypedDict, total=False):
     google_session_id: Optional[str]  # ada_google_sid (legacy jarvis_google_sid) for Calendar/Gmail agent
     coding_mode: bool  # UI: force coding agent + optional project folder snapshot
     coding_project_context: str  # bounded text from tools.project_repository
+    run_id: Optional[str]
+    task_spec: dict
+    agent_state: dict
+    failure_class: Optional[str]
+    pending_approvals: list

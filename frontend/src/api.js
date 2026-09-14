@@ -1,4 +1,21 @@
-const API_BASE = import.meta.env.VITE_API_URL || '/api';
+function detectDesktopShell() {
+  if (typeof window === 'undefined') return false
+  return Boolean(window.__TAURI_INTERNALS__ || window.__TAURI__)
+}
+
+export function isDesktopShell() {
+  return detectDesktopShell()
+}
+
+/** HTTP API origin. Vite proxy `/api` in the browser; Tauri talks to the localhost sidecar. */
+export function getApiBase() {
+  const env = (import.meta.env.VITE_API_URL || '').replace(/\/$/, '')
+  if (env) return env
+  if (detectDesktopShell()) return 'http://127.0.0.1:8000'
+  return '/api'
+}
+
+const API_BASE = getApiBase()
 
 async function request(path, options = {}) {
   const url = path.startsWith('http') ? path : `${API_BASE}${path}`;
@@ -75,7 +92,7 @@ export async function sendMessageStream(
     codingProjectSnapshot = null,
   },
 ) {
-  const base = import.meta.env.VITE_API_URL || '/api'
+  const base = getApiBase()
   const res = await fetch(base + '/chat/send-message/stream', {
     method: 'POST',
     credentials: 'include',
@@ -128,6 +145,8 @@ export async function sendMessageStream(
               reply: data.reply,
               tool_used: data.tool_used ?? null,
               file_edits: data.file_edits ?? null,
+              pending_approvals: data.pending_approvals ?? null,
+              run_id: data.run_id ?? null,
             }
           }
         } catch (_) {}
@@ -135,7 +154,7 @@ export async function sendMessageStream(
     }
   }
   if (full) onDone?.(full)
-  return { reply: full, tool_used: toolUsed }
+  return { reply: full, tool_used: toolUsed, file_edits: null, pending_approvals: null }
 }
 
 /** Send message with file uploads (multipart). Use when user attached files. */
@@ -156,7 +175,7 @@ export async function sendMessageWithFiles(
   for (const f of files) {
     form.append('files', f);
   }
-  const base = import.meta.env.VITE_API_URL || '/api';
+  const base = getApiBase();
   const url = base + '/chat/send-message-with-files';
   const res = await fetch(url, { method: 'POST', body: form, credentials: 'include' });
   if (!res.ok) throw new Error(await res.text() || `HTTP ${res.status}`);
@@ -230,7 +249,7 @@ export async function setModelSetting(provider) {
 
 /** WebSocket URL for agent steps (use wsOrigin for WS) */
 export function agentStepsWsUrl() {
-  const base = import.meta.env.VITE_API_URL || '';
+  const base = getApiBase() === '/api' ? (import.meta.env.VITE_API_URL || '') : getApiBase();
   if (base.startsWith('http://')) {
     return base.replace('http://', 'ws://') + '/ws/agent-steps';
   }
@@ -248,7 +267,7 @@ export async function getGoogleAuthStatus() {
 
 /** Gmail profile for current session; does not throw on HTTP errors (returns { ok: false, error }). */
 export async function getGmailProfile() {
-  const base = import.meta.env.VITE_API_URL || '/api';
+  const base = getApiBase();
   const res = await fetch(`${base}/integrations/gmail/profile`, { credentials: 'include' });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
@@ -258,7 +277,7 @@ export async function getGmailProfile() {
 }
 
 export function getGoogleAuthLoginUrl(nextPath = '/settings') {
-  const base = import.meta.env.VITE_API_URL || '/api'
+  const base = getApiBase()
   const path = nextPath && nextPath.startsWith('/') ? nextPath : '/settings'
   return `${base}/auth/google/login?next=${encodeURIComponent(path)}`
 }
@@ -298,4 +317,87 @@ export async function runHostShellCommand(command, timeoutSec = 120) {
       timeout_sec: timeoutSec,
     }),
   })
+}
+
+export async function getRuntimeSettings() {
+  return request('/settings/runtime')
+}
+
+export async function setAutonomyLevel(autonomy) {
+  return request('/settings/autonomy', {
+    method: 'POST',
+    body: JSON.stringify({ autonomy }),
+  })
+}
+
+export async function setDesktopArmed(armed) {
+  return request('/settings/desktop-armed', {
+    method: 'POST',
+    body: JSON.stringify({ armed: !!armed }),
+  })
+}
+
+export async function getApiKeysStatus() {
+  return request('/settings/keys-status')
+}
+
+export async function saveApiKeys({ openaiApiKey, xaiApiKey }) {
+  const body = {}
+  if (openaiApiKey != null && openaiApiKey !== '') body.openai_api_key = openaiApiKey
+  if (xaiApiKey != null && xaiApiKey !== '') body.xai_api_key = xaiApiKey
+  return request('/settings/keys', { method: 'POST', body: JSON.stringify(body) })
+}
+
+export async function getWorkspaceStatus() {
+  return request('/workspace/status')
+}
+
+export async function linkWorkspace(path) {
+  return request('/workspace/link', {
+    method: 'POST',
+    body: JSON.stringify({ path }),
+  })
+}
+
+export async function unlinkWorkspace() {
+  return request('/workspace/unlink', { method: 'POST' })
+}
+
+export async function fetchWorkspaceSnapshot() {
+  return request('/workspace/snapshot', { method: 'POST' })
+}
+
+export async function readWorkspaceFile(relPath) {
+  const q = encodeURIComponent(relPath || '')
+  return request(`/workspace/file?rel_path=${q}`)
+}
+
+export async function writeWorkspaceFile(relPath, content) {
+  return request('/workspace/file', {
+    method: 'PUT',
+    body: JSON.stringify({ rel_path: relPath, content }),
+  })
+}
+
+export async function listPendingApprovals(chatId = null) {
+  const q = chatId ? `?chat_id=${encodeURIComponent(chatId)}` : ''
+  return request(`/agent/pending${q}`)
+}
+
+export async function resolveAgentApproval(approvalId, approve) {
+  return request('/agent/approve', {
+    method: 'POST',
+    body: JSON.stringify({ approval_id: approvalId, approve: !!approve }),
+  })
+}
+
+/** Native folder picker when running inside Tauri; otherwise null. */
+export async function pickWorkspaceFolderNative() {
+  try {
+    const { invoke } = await import('@tauri-apps/api/core')
+    const path = await invoke('pick_workspace_folder')
+    return path || null
+  } catch {
+    return null
+  }
 }

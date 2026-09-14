@@ -6,8 +6,10 @@ Dev server proxies `/api` and `/ws` to **`http://localhost:8000`**. If you only 
 
 ```bash
 cd backend
-poetry run uvicorn main:app --reload --port 8000
+poetry run uvicorn main:app --reload --host 127.0.0.1 --port 8000
 ```
+
+Desktop window (Tauri): from repo root, `npm run tauri:dev` after Rust is installed. See [DESKTOP.md](../DESKTOP.md).
 
 **Terminal 2 — frontend**:
 

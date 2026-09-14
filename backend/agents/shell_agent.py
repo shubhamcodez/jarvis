@@ -52,6 +52,7 @@ def run_shell_agent(
     api_key: Optional[str] = None,
     provider: str = "openai",
     max_steps: int = 15,
+    chat_id: Optional[str] = None,
 ) -> tuple[str, dict]:
     """
     Multi-turn: model proposes command → run on host → feed output back.
@@ -138,7 +139,37 @@ def run_shell_agent(
                 on_step(step_i + 1, summary[:200], "done", summary[:400], summary[:1500], True, screenshot_base64=None)
             return reply.strip(), tool_used
 
-        result = run_shell_command(command)
+        from agents.hitl import maybe_gate_shell
+
+        result = maybe_gate_shell(
+            command,
+            chat_id=chat_id,
+            execute=lambda cmd=command: run_shell_command(cmd),
+        )
+        if result.get("pending_approval"):
+            last_tool_result = json.dumps(result, ensure_ascii=False)[:8000]
+            reply = (
+                f"**Shell task** (goal: {goal})\n\n"
+                f"Paused for confirmation: `{command}`\n\n"
+                "Approve or deny this command in the Ada window, then retry if needed."
+            )
+            if transcript:
+                reply += "\n\n**Command log:**\n" + "\n".join(transcript)
+            if on_step:
+                on_step(
+                    step_i + 1,
+                    "Awaiting approval",
+                    "hitl",
+                    result.get("error") or "pending",
+                    last_tool_result,
+                    True,
+                    screenshot_base64=None,
+                )
+            return reply, {
+                "name": "shell",
+                "input": goal[:2000],
+                "result": last_tool_result,
+            }
         last_tool_result = json.dumps(result, ensure_ascii=False)[:8000]
         line = f"- `$ {command}` → exit {result.get('returncode')}\n  stdout:\n```\n{(result.get('stdout') or '')[:2000]}\n```"
         if result.get("stderr"):

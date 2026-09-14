@@ -1,0 +1,9 @@
+[[permission]]
+identifier = "allow-pick-workspace-folder"
+description = "Native folder picker"
+commands.allow = ["pick_workspace_folder"]
+
+[[permission]]
+identifier = "allow-backend-health-hint"
+description = "Sidecar health URL"
+commands.allow = ["backend_health_hint"]

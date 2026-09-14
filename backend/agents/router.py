@@ -32,7 +32,24 @@ async def _supervisor_node(state: RouterState) -> RouterState:
         or (decision.get("goal") or "")
         or message
     ).strip()
-    return {"supervisor_decision": decision, "goal": goal}
+    from config import get_workspace_root
+    from .agent_state import begin_run
+    from .task_spec import build_task_spec
+
+    spec = build_task_spec(
+        message,
+        decision,
+        coding_mode=bool(state.get("coding_mode")),
+        workspace_root=get_workspace_root() or None,
+    )
+    ast = begin_run(state.get("chat_id"), spec, agents)
+    return {
+        "supervisor_decision": decision,
+        "goal": goal,
+        "task_spec": spec,
+        "agent_state": ast,
+        "run_id": ast.get("run_id"),
+    }
 
 
 async def _chat_node(state: RouterState) -> RouterState:
@@ -80,11 +97,17 @@ async def _chat_node(state: RouterState) -> RouterState:
     tool_system, tool_used = run_tools_for_turn(
         message or "", recent_turns=recent_turns or [], web_search_query=wq
     )
-    if tool_system:
-        memory_context = (memory_context or "") + "\n\n" + tool_system
+    from memory.prompt_assembly import build_policy_context
+    from .agent_state import structured_view
+    from .task_spec import format_task_spec_for_prompt
 
-    # Build system content (memory + tool) and call with history so the model sees the conversation
-    system_content = (memory_context or "").strip() or None
+    system_content = build_policy_context(
+        task_spec_text=format_task_spec_for_prompt(state.get("task_spec") or {}),
+        agent_state_text=structured_view(state.get("agent_state") or {}),
+        memory_context=memory_context,
+        tool_system=tool_system or "",
+        untrusted_note=bool(wq),
+    ).strip() or None
     reply = await asyncio.to_thread(
         client.chat,
         api_key,
@@ -195,6 +218,9 @@ async def _run_agent_plan_node(state: RouterState) -> RouterState:
 
         wrapped = _wrap_on_step_for_plan(on_step, idx, str(agent))
 
+        from .agent_state import mark_plan_step, record_action_signature, record_error
+
+        ast = state.get("agent_state") or {}
         try:
             if agent == "desktop":
                 reply = await asyncio.to_thread(
@@ -217,7 +243,12 @@ async def _run_agent_plan_node(state: RouterState) -> RouterState:
                 )
             elif agent == "shell":
                 reply, tu = await asyncio.to_thread(
-                    run_shell_agent, goal_run, wrapped, api_key, provider
+                    run_shell_agent,
+                    goal_run,
+                    wrapped,
+                    api_key,
+                    provider,
+                    chat_id=state.get("chat_id"),
                 )
             elif agent == "finance":
                 reply, tu = await asyncio.to_thread(
@@ -231,12 +262,25 @@ async def _run_agent_plan_node(state: RouterState) -> RouterState:
                     wrapped,
                     api_key,
                     provider,
+                    state.get("chat_id"),
                 )
             else:
                 continue
         except Exception as e:
             reply = f"**{agent}** failed: {e}"
             tu = None
+            ast = record_error(ast, str(e))
+
+        ast = record_action_signature(ast, f"{agent}|{base_goal[:80]}")
+        failed = bool(tu is None and "failed:" in (reply or "").lower()) or (
+            isinstance(tu, dict) and "failed" in str(tu.get("result") or "").lower()
+        )
+        ast = mark_plan_step(
+            ast,
+            idx,
+            "error" if failed else "complete",
+            finding=(reply or "")[:400],
+        )
 
         if tu:
             last_tool = tu
@@ -258,9 +302,39 @@ async def _run_agent_plan_node(state: RouterState) -> RouterState:
         return {"reply": "No agent steps completed.", "route": "chat"}
 
     combined = "\n\n".join(sections)
+    ast = state.get("agent_state") or {}
+    from .control_loop import classify_failure, should_replan, should_stop, verify_success_criteria
+    from agents.hitl import list_pending
+
+    verify = verify_success_criteria(ast, combined)
+    stop, stop_reason = should_stop(ast)
+    replan, replan_why = should_replan(ast)
+    failure_class = None
+    if not verify.get("ok") or stop:
+        failure_class = classify_failure(
+            (ast.get("errors") or [None])[-1] if ast.get("errors") else None,
+            verify,
+            stop_reason or replan_why,
+        )
+    if replan and not stop:
+        budget = dict(ast.get("budget") or {})
+        budget["replans"] = int(budget.get("replans") or 0) + 1
+        ast["budget"] = budget
+        from .agent_state import save_state
+
+        save_state(ast)
+        combined += (
+            f"\n\n_Control policy: no meaningful progress ({replan_why}). "
+            "Ask again if you want a different approach._"
+        )
+
     out: RouterState = {
         "reply": combined,
         "route": "run_multi_agent" if len(sections) > 1 else last_route,
+        "agent_state": ast,
+        "run_id": ast.get("run_id") or state.get("run_id"),
+        "failure_class": failure_class,
+        "pending_approvals": list_pending(state.get("chat_id")),
     }
     if last_tool:
         out["tool_used"] = last_tool

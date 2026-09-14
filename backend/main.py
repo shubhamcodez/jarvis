@@ -35,12 +35,19 @@ from fastapi.responses import JSONResponse, RedirectResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from config import (
+    api_keys_status,
+    get_autonomy_level,
     get_chat_history_limit,
     get_grep_root,
     get_llm_api_key,
     get_llm_provider,
     get_openai_api_key,
+    is_desktop_armed,
+    is_packaged,
+    set_autonomy_level,
+    set_desktop_armed,
     set_llm_provider,
+    write_api_keys,
 )
 from agents.models import get_llm_client
 from agents.supervisor import compute_supervisor_decision
@@ -111,7 +118,15 @@ def _clear_google_sid_cookies(response: JSONResponse | RedirectResponse) -> None
 app = FastAPI(title="Ada API")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173", "http://localhost:1430"],
+    allow_origins=[
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "http://localhost:1420",
+        "http://localhost:1430",
+        "http://tauri.localhost",
+        "https://tauri.localhost",
+        "tauri://localhost",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -203,7 +218,18 @@ class ChatbotResponseRequest(BaseModel):
 def _prepare_coding_project_context(coding_mode: bool, snapshot: Optional[str] = None) -> str:
     if not coding_mode:
         return ""
-    return (snapshot or "").strip()
+    text = (snapshot or "").strip()
+    if text:
+        return text
+    try:
+        from tools.workspace_io import snapshot as ws_snapshot
+
+        built = ws_snapshot()
+        if built.get("ok"):
+            return (built.get("snapshot") or "").strip()
+    except Exception:
+        pass
+    return ""
 
 
 class AppendChatLogRequest(BaseModel):
@@ -225,6 +251,53 @@ class SetStoragePathRequest(BaseModel):
 
 class SetModelRequest(BaseModel):
     provider: str  # "openai" or "xai"
+
+
+class SetAutonomyRequest(BaseModel):
+    autonomy: str
+
+
+class SetDesktopArmedRequest(BaseModel):
+    armed: bool
+
+
+class SetApiKeysRequest(BaseModel):
+    openai_api_key: Optional[str] = None
+    xai_api_key: Optional[str] = None
+
+
+class WorkspaceLinkRequest(BaseModel):
+    path: str
+
+
+class WorkspaceWriteRequest(BaseModel):
+    rel_path: str
+    content: str = ""
+
+
+class AgentApproveRequest(BaseModel):
+    approval_id: str
+    approve: bool = True
+
+
+def _trace_extra(result: dict | None) -> dict:
+    result = result or {}
+    extra = {}
+    if result.get("run_id"):
+        extra["run_id"] = result.get("run_id")
+    if result.get("failure_class"):
+        extra["failure_class"] = result.get("failure_class")
+    spec = result.get("task_spec") or (result.get("agent_state") or {}).get("task_spec")
+    if spec:
+        extra["task_spec"] = {
+            "goal": spec.get("goal"),
+            "risk": spec.get("risk"),
+            "success_criteria": spec.get("success_criteria"),
+        }
+    plan = (result.get("agent_state") or {}).get("plan")
+    if plan:
+        extra["plan"] = plan
+    return extra
 
 
 class PythonSandboxRequest(BaseModel):
@@ -402,6 +475,8 @@ async def send_message(body: SendMessageRequest, request: Request):
         if tool_used and chat_id:
             set_current_chat(chat_id)
             append_chat_log("tool", json.dumps(tool_used))
+        extra = _trace_extra(result)
+        extra["step_count"] = extra.get("step_count")
         trace_log(
             provider=provider,
             route=route,
@@ -409,6 +484,7 @@ async def send_message(body: SendMessageRequest, request: Request):
             reply=reply,
             success=True,
             duration_sec=time.perf_counter() - start,
+            extra=extra,
         )
         schedule_post_turn_observability()
     except Exception as e:
@@ -420,6 +496,7 @@ async def send_message(body: SendMessageRequest, request: Request):
             success=False,
             error=str(e),
             duration_sec=time.perf_counter() - start,
+            extra={"failure_class": "infrastructure"},
         )
         raise
     finally:
@@ -430,6 +507,10 @@ async def send_message(body: SendMessageRequest, request: Request):
         out["file_edits"] = file_edits
     if result.get("tool_used"):
         out["tool_used"] = result["tool_used"]
+    if result.get("pending_approvals"):
+        out["pending_approvals"] = result["pending_approvals"]
+    if result.get("run_id"):
+        out["run_id"] = result["run_id"]
     return out
 
 
@@ -839,6 +920,7 @@ async def send_message_stream(body: SendMessageRequest, request: Request):
             if tool_used and chat_id:
                 set_current_chat(chat_id)
                 append_chat_log("tool", json.dumps(tool_used))
+            extra = _trace_extra(result)
             trace_log(
                 provider=provider,
                 route=route,
@@ -846,6 +928,7 @@ async def send_message_stream(body: SendMessageRequest, request: Request):
                 reply=reply,
                 success=True,
                 duration_sec=time.perf_counter() - stream_start,
+                extra=extra,
             )
             schedule_post_turn_observability()
         except Exception as e:
@@ -857,6 +940,7 @@ async def send_message_stream(body: SendMessageRequest, request: Request):
                 success=False,
                 error=str(e),
                 duration_sec=time.perf_counter() - stream_start,
+                extra={"failure_class": "infrastructure"},
             )
             raise
         finally:
@@ -871,6 +955,11 @@ async def send_message_stream(body: SendMessageRequest, request: Request):
             payload["file_edits"] = file_edits
         if tool_used:
             payload["tool_used"] = tool_used
+        pending = result.get("pending_approvals") if isinstance(result, dict) else None
+        if pending:
+            payload["pending_approvals"] = pending
+        if isinstance(result, dict) and result.get("run_id"):
+            payload["run_id"] = result.get("run_id")
         yield f"data: {json.dumps(payload)}\n\n"
 
     return StreamingResponse(
@@ -1021,6 +1110,116 @@ async def api_set_model(body: SetModelRequest):
     """Set LLM provider to openai or xai."""
     set_llm_provider(body.provider)
     return {"provider": get_llm_provider()}
+
+
+@app.get("/settings/runtime")
+async def api_get_runtime():
+    return {
+        "provider": get_llm_provider(),
+        "autonomy": get_autonomy_level(),
+        "desktop_armed": is_desktop_armed(),
+        "packaged": is_packaged(),
+        "keys": api_keys_status(),
+    }
+
+
+@app.post("/settings/autonomy")
+async def api_set_autonomy(body: SetAutonomyRequest):
+    set_autonomy_level(body.autonomy)
+    return {"autonomy": get_autonomy_level()}
+
+
+@app.post("/settings/desktop-armed")
+async def api_set_desktop_armed(body: SetDesktopArmedRequest):
+    set_desktop_armed(bool(body.armed))
+    return {"desktop_armed": is_desktop_armed()}
+
+
+@app.get("/settings/keys-status")
+async def api_keys_status_ep():
+    return api_keys_status()
+
+
+@app.post("/settings/keys")
+async def api_set_keys(body: SetApiKeysRequest):
+    write_api_keys(openai_key=body.openai_api_key, xai_key=body.xai_api_key)
+    return api_keys_status()
+
+
+@app.get("/workspace/status")
+async def api_workspace_status():
+    from tools.workspace_io import status as ws_status
+
+    return ws_status()
+
+
+@app.post("/workspace/link")
+async def api_workspace_link(body: WorkspaceLinkRequest):
+    from tools.workspace_io import link_workspace
+
+    return link_workspace(body.path)
+
+
+@app.post("/workspace/unlink")
+async def api_workspace_unlink():
+    from tools.workspace_io import unlink_workspace
+
+    unlink_workspace()
+    return {"ok": True}
+
+
+@app.post("/workspace/snapshot")
+async def api_workspace_snapshot():
+    from tools.workspace_io import snapshot as ws_snapshot
+
+    try:
+        return ws_snapshot()
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+@app.get("/workspace/file")
+async def api_workspace_read(rel_path: str = Query(...)):
+    from tools.workspace_io import read_file
+
+    try:
+        return read_file(rel_path)
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+@app.put("/workspace/file")
+async def api_workspace_write(body: WorkspaceWriteRequest):
+    from tools.workspace_io import write_file
+
+    try:
+        return write_file(body.rel_path, body.content)
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+@app.get("/workspace/list")
+async def api_workspace_list():
+    from tools.workspace_io import list_rel_paths
+
+    try:
+        return {"ok": True, "paths": list_rel_paths()}
+    except Exception as e:
+        return {"ok": False, "error": str(e), "paths": []}
+
+
+@app.get("/agent/pending")
+async def api_agent_pending(chat_id: Optional[str] = None):
+    from agents.hitl import list_pending
+
+    return {"pending": list_pending(chat_id)}
+
+
+@app.post("/agent/approve")
+async def api_agent_approve(body: AgentApproveRequest):
+    from agents.hitl import resolve_approval
+
+    return resolve_approval(body.approval_id, bool(body.approve))
 
 
 # --- Google OAuth (multi-user scaffold) ---
@@ -1327,13 +1526,19 @@ async def api_tools_shell(body: ShellRunRequest):
             "ok": False,
             "error": "Shell disabled on server (remove ADA_DISABLE_SHELL or set ADA_ENABLE_SHELL=1).",
         }
-    result = await asyncio.to_thread(run_shell_command, body.command, body.timeout_sec)
+    from agents.hitl import maybe_gate_shell
+
+    result = await asyncio.to_thread(
+        maybe_gate_shell,
+        body.command,
+        execute=lambda: run_shell_command(body.command, body.timeout_sec),
+    )
     return result
 
 
 @app.get("/health")
 async def health():
-    return {"status": "ok"}
+    return {"status": "ok", "packaged": is_packaged()}
 
 
 if __name__ == "__main__":
