@@ -219,6 +219,18 @@ class WorkspaceTreeListTests(unittest.TestCase):
                 self.assertIn("readme.md", tree)
                 self.assertFalse(any(p.startswith("node_modules") for p in tree))
 
+    def test_tree_stamp_changes_when_file_added(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "a.txt").write_text("1", encoding="utf-8")
+            with patch("tools.workspace_io.get_workspace_root", return_value=str(root)):
+                from tools.workspace_io import tree_stamp
+
+                first = tree_stamp()["stamp"]
+                (root / "b.txt").write_text("2", encoding="utf-8")
+                second = tree_stamp()["stamp"]
+                self.assertNotEqual(first, second)
+
 
 if __name__ == "__main__":
     unittest.main()

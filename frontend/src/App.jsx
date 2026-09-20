@@ -37,6 +37,7 @@ import {
   unlinkWorkspace,
   fetchWorkspaceSnapshot,
   listWorkspaceFiles,
+  workspaceTreeStamp,
   readWorkspaceFile,
   writeWorkspaceFile,
   listPendingApprovals,
@@ -86,6 +87,7 @@ import { CreateAgentModal } from './CreateAgentModal'
 import { ControlPlane, ModeMenu } from './ControlPlane'
 import {
   buildSnapshotFromDirectoryHandle,
+  listTreePathsFromDirectoryHandle,
   buildSnapshotFromFileList,
   canUseDirectoryPicker,
   parseRelPathsFromSnapshotMarkdown,
@@ -901,6 +903,7 @@ function App() {
   const [createAgentOpen, setCreateAgentOpen] = useState(false)
   const [createAgentError, setCreateAgentError] = useState('')
   const abortRef = useRef(null)
+  const workspaceTreeStampRef = useRef('')
   const lastRunIdRef = useRef(null)
   const activeRunsRef = useRef([])
   const sendingRef = useRef(false)
@@ -1773,6 +1776,20 @@ function App() {
         if (disk?.ok) {
           setFilePreview((p) => (p && p.relPath === relPath ? { ...p, body: str, source: 'disk' } : p))
           const wl = workspaceLocalLabel.trim()
+          const rel = String(relPath || '').replace(/\\/g, '/')
+          if (rel) {
+            setWorkspaceRelPaths((prev) => {
+              if (prev.includes(rel)) return prev
+              const next = [...prev, rel]
+              try {
+                sessionStorage.setItem('jarvis-workspace-paths', JSON.stringify(next))
+              } catch {
+                /* ignore */
+              }
+              return next
+            })
+            workspaceTreeStampRef.current = ''
+          }
           if (!skipUndoRecord && wl && beforeSnapshot !== str) {
             void pushWorkspaceEdit(wl, relPath, beforeSnapshot, str)
             setWorkspaceUndoTick((t) => t + 1)
@@ -2180,6 +2197,7 @@ function App() {
     const list = Array.isArray(relPaths) ? relPaths : []
     setWorkspaceLocalLabel(label)
     setWorkspaceRelPaths(list)
+    workspaceTreeStampRef.current = ''
     if (snapshot != null) setWorkspaceSnapshot(snapshot)
     try {
       localStorage.removeItem('jarvis-workspace-folder')
@@ -2203,6 +2221,19 @@ function App() {
     }
   }
 
+  const applyWorkspacePaths = (paths) => {
+    const list = Array.isArray(paths) ? paths : []
+    setWorkspaceRelPaths((prev) => {
+      if (prev.length === list.length && prev.every((p, i) => p === list[i])) return prev
+      return list
+    })
+    try {
+      sessionStorage.setItem('jarvis-workspace-paths', JSON.stringify(list))
+    } catch {
+      /* ignore */
+    }
+  }
+
   const reloadWorkspaceTree = async () => {
     if (workspaceClearedRef.current) return
     setProjectImportBusy(true)
@@ -2210,12 +2241,8 @@ function App() {
       await initApiAuth()
       const listed = await listWorkspaceFiles()
       if (listed?.ok && Array.isArray(listed.paths) && listed.paths.length) {
-        setWorkspaceRelPaths(listed.paths)
-        try {
-          sessionStorage.setItem('jarvis-workspace-paths', JSON.stringify(listed.paths))
-        } catch {
-          /* ignore */
-        }
+        applyWorkspacePaths(listed.paths)
+        workspaceTreeStampRef.current = ''
       }
     } catch (e) {
       alert(e?.message || 'Could not load the file list.')
@@ -2224,8 +2251,46 @@ function App() {
     }
   }
 
+  useEffect(() => {
+    if (!codingModeEnabled) return
+    const watching = Boolean(workspaceDiskPath || workspaceLocalLabel.trim() || projectRootHandleRef.current)
+    if (!watching) return
+    let cancelled = false
+
+    const tick = async () => {
+      if (cancelled || workspaceClearedRef.current) return
+      try {
+        const st = await workspaceTreeStamp()
+        if (!cancelled && st?.ok && st.stamp && st.stamp !== workspaceTreeStampRef.current) {
+          workspaceTreeStampRef.current = st.stamp
+          const listed = await listWorkspaceFiles()
+          if (!cancelled && listed?.ok && Array.isArray(listed.paths)) {
+            applyWorkspacePaths(listed.paths)
+          }
+        }
+      } catch {
+        const h = projectRootHandleRef.current
+        if (!h || cancelled) return
+        try {
+          const paths = await listTreePathsFromDirectoryHandle(h)
+          if (!cancelled && paths.length) applyWorkspacePaths(paths)
+        } catch {
+          /* ignore */
+        }
+      }
+    }
+
+    tick()
+    const id = window.setInterval(tick, 2000)
+    return () => {
+      cancelled = true
+      window.clearInterval(id)
+    }
+  }, [codingModeEnabled, workspaceDiskPath, workspaceLocalLabel])
+
   const clearProjectContext = () => {
     workspaceClearedRef.current = true
+    workspaceTreeStampRef.current = ''
     const label = workspaceLocalLabel.trim()
     if (label) {
       clearPreviewCacheForRoot(label).catch(() => {})

@@ -167,6 +167,36 @@ def list_tree_paths(max_files: int = 8000, *, include_hidden: bool = True) -> li
     return out
 
 
+def tree_stamp(max_files: int = 8000) -> dict[str, Any]:
+    """Cheap fingerprint so the explorer can poll without downloading the full tree."""
+    root = _root()
+    count = 0
+    latest = 0
+    mix = 0
+    for dirpath, dirnames, filenames in os.walk(root, topdown=True):
+        kept = [d for d in sorted(dirnames) if d not in _SKIP_DIR_NAMES]
+        dirnames[:] = kept
+        rel_dir = Path(dirpath).relative_to(root)
+        if rel_dir.parts:
+            key = rel_dir.as_posix().replace("\\", "/") + "/"
+            mix ^= hash(key)
+            count += 1
+        for fn in sorted(filenames):
+            rp = (rel_dir / fn).as_posix() if rel_dir.parts else fn
+            rp = rp.replace("\\", "/")
+            try:
+                m = int((Path(dirpath) / fn).stat().st_mtime_ns)
+            except OSError:
+                m = 0
+            if m > latest:
+                latest = m
+            mix ^= hash((rp, m))
+            count += 1
+            if count >= max_files:
+                return {"ok": True, "stamp": f"{count}:{latest}:{mix}", "count": count}
+    return {"ok": True, "stamp": f"{count}:{latest}:{mix}", "count": count}
+
+
 def read_file(rel_path: str, max_bytes: int = 400_000) -> dict[str, Any]:
     target = resolve_under_root(rel_path)
     if not target.is_file():

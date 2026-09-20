@@ -492,6 +492,10 @@ export async function listWorkspaceFiles() {
   return request('/workspace/list')
 }
 
+export async function workspaceTreeStamp() {
+  return request('/workspace/tree-stamp')
+}
+
 export async function readWorkspaceFile(relPath) {
   const q = encodeURIComponent(relPath || '')
   return request(`/workspace/file?rel_path=${q}`)

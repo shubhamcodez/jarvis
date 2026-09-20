@@ -650,3 +650,33 @@ export async function buildSnapshotFromFileList(fileList) {
 export function canUseDirectoryPicker() {
   return typeof window !== 'undefined' && typeof window.showDirectoryPicker === 'function'
 }
+
+/** Names-only walk for the explorer (no file bodies). Includes hidden files except skip dirs. */
+export async function listTreePathsFromDirectoryHandle(dirHandle, maxFiles = 8000) {
+  const out = []
+  let files = 0
+
+  async function walk(handle, pathPrefix, depth) {
+    if (files >= maxFiles) return
+    const entries = []
+    for await (const entry of handle.values()) entries.push(entry)
+    entries.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }))
+    for (const entry of entries) {
+      if (files >= maxFiles) return
+      const name = entry.name
+      if (entry.kind === 'directory') {
+        if (SKIP_DIR_NAMES.has(name)) continue
+        const rel = `${pathPrefix}${name}/`
+        out.push(rel)
+        if (depth >= 12) continue
+        await walk(entry, rel, depth + 1)
+      } else {
+        out.push(`${pathPrefix}${name}`)
+        files += 1
+      }
+    }
+  }
+
+  await walk(dirHandle, '', 0)
+  return out
+}

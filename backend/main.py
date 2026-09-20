@@ -2144,6 +2144,16 @@ async def api_workspace_list():
         return {"ok": False, "error": str(e), "paths": []}
 
 
+@app.get("/workspace/tree-stamp")
+async def api_workspace_tree_stamp():
+    from tools.workspace_io import tree_stamp
+
+    try:
+        return tree_stamp()
+    except Exception as e:
+        return {"ok": False, "error": str(e), "stamp": "", "count": 0}
+
+
 @app.get("/agent/pending")
 async def api_agent_pending(chat_id: Optional[str] = None):
     from agents.hitl import list_pending
