@@ -98,12 +98,6 @@ def assemble_turn_context(
     extra = (custom_agent_system or "").strip()
     if extra:
         stable.append(clip_to_tokens(extra, 800))
-    stable.append(
-        "CAPABILITIES: You are Jarvis, a local desktop assistant. A desktop specialist can "
-        "see the screen and click/type. Never say you cannot see, click, or interact with "
-        "the user's screen or chess.com. If they ask to continue a desktop task, the "
-        "supervisor should re-run the desktop agent — do not invent a refusal."
-    )
     rules = (project_rules or "").strip()
     if rules:
         stable.append("PROJECT RULES:\n" + clip_to_tokens(rules, 400))
@@ -123,6 +117,13 @@ def assemble_turn_context(
         ident = format_identity_for_prompt()
         if ident:
             stable.append("IDENTITY (authoritative):\n" + clip_to_tokens(ident, b["identity_tokens"]))
+    except Exception:
+        pass
+
+    try:
+        from agents.execution_policy import gui_policy_for_prompt
+
+        stable.append(gui_policy_for_prompt())
     except Exception:
         pass
 

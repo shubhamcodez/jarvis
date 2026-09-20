@@ -51,6 +51,7 @@ async def _supervisor_node(state: RouterState) -> RouterState:
                 coding_mode=bool(state.get("coding_mode")),
                 coding_project_context=(state.get("coding_project_context") or ""),
                 recent_turns=recent_turns,
+                thread=thread,
             )
     agents = decision.get("agents") or []
     tools = state.get("custom_agent_tools")
@@ -206,16 +207,21 @@ async def _chat_node(state: RouterState) -> RouterState:
             allowed_tools=set(allowed) if allowed is not None else None,
         )
 
+    from memory.thread_context import format_thread_context, infer_thread_from_turns, merge_thread, thread_from_state
+
+    ast = state.get("agent_state") or {}
+    thread = merge_thread(thread_from_state(ast), infer_thread_from_turns(recent_turns))
     pack = assemble_turn_context(
         user_message=message,
         history=history,
         memory_context=memory_context or "",
         tool_system=tool_system or "",
         task_spec_text=format_task_spec_for_prompt(state.get("task_spec") or {}),
-        agent_state_text=structured_view(state.get("agent_state") or {}),
+        agent_state_text=structured_view(ast),
         custom_agent_system=(state.get("custom_agent_system") or "").strip(),
         project_rules=load_project_rules() or "",
         untrusted_tools=bool(wq),
+        thread_context_text=format_thread_context(thread),
     )
     system_content = pack.system or None
     with span("llm", provider=provider, route="chat") as sp:
@@ -359,9 +365,9 @@ async def _run_agent_plan_node(state: RouterState) -> RouterState:
         try:
             with span("specialist", agent=str(agent), index=idx, run_id=run_id or ""):
                 if agent == "desktop":
-                    from agents.computer_use.budget import parse_duration, steps_for_budget
+                    from agents.computer_use.budget import implied_duration, parse_duration, steps_for_budget
 
-                    dur = parse_duration(goal_run)
+                    dur = parse_duration(goal_run) or implied_duration(goal_run)
                     steps = steps_for_budget(dur, 25)
                     reply = await asyncio.to_thread(
                         run_desktop_agent,
@@ -449,6 +455,22 @@ async def _run_agent_plan_node(state: RouterState) -> RouterState:
             "error" if failed else ("blocked" if pending else "complete"),
             finding=(reply or "")[:400],
         )
+        try:
+            from memory.thread_context import desktop_unfinished
+            from .agent_state import record_thread_turn
+
+            unfinished = bool(failed or pending)
+            if agent == "desktop":
+                unfinished = unfinished or desktop_unfinished(reply or "")
+            ast = record_thread_turn(
+                ast,
+                route=str(agent),
+                goal=base_goal,
+                reply=reply or "",
+                unfinished=unfinished,
+            )
+        except Exception:
+            logging.getLogger("jarvis.router").warning("record_thread_turn failed", exc_info=True)
 
         if tu:
             last_tool = tu

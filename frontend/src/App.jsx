@@ -4913,7 +4913,7 @@ function App() {
               <div className="settings-section">
                 <label className="settings-label">Desktop GUI control</label>
                 <p className="settings-description">
-                  The desktop agent can move the mouse and type. It stays off until you arm it for this machine.
+                  When Armed, Jarvis may screenshot and click/type. When Off, it will not, and chat will tell you to arm this first.
                 </p>
                 <div className="settings-theme-switch" role="group" aria-label="Desktop armed">
                   <button

@@ -62,9 +62,7 @@ def summarize_agent_trace(text: str, *, keep_steps: int = 5) -> str:
         out.extend(f"  {x}" for x in steps[-keep_steps:])
     out.extend(footer[-3:])
     if desktop_unfinished(raw):
-        out.append(
-            "Status: unfinished. The desktop goal is still open — do not claim you cannot see or click the screen."
-        )
+        out.append("Status: unfinished. The desktop goal is still open.")
     return "\n".join(out)
 
 
@@ -130,8 +128,20 @@ def format_thread_context(thread: Optional[dict[str, Any]]) -> str:
     if t.get("last_summary"):
         lines.append(t["last_summary"])
     if t.get("last_status") == "unfinished" and (t.get("last_route") or "") == "desktop":
-        lines.append(
-            "If the user continues, retries, or refers to this work, keep the desktop specialist. "
-            "Do not deny screen control you just used."
-        )
+        try:
+            from agents.execution_policy import gui_is_armed
+
+            armed = gui_is_armed()
+        except Exception:
+            armed = False
+        if armed:
+            lines.append(
+                "If the user continues or retries, keep the desktop specialist. "
+                "Do not deny screen control while Desktop GUI control is Armed."
+            )
+        else:
+            lines.append(
+                "Desktop GUI control is Off. Do not claim you can click. "
+                "Tell the user to set Settings → Desktop GUI control to Armed, then retry."
+            )
     return "\n".join(lines)

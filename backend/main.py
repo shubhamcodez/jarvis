@@ -1050,12 +1050,22 @@ async def send_message_stream(body: SendMessageRequest, request: Request):
                         key = get_openai_api_key()
                     except ValueError:
                         key = get_llm_api_key()
+                    from agents.agent_state import load_state as _load_ast
+                    from memory.thread_context import infer_thread_from_turns, merge_thread, thread_from_state
+
+                    _th = merge_thread(
+                        thread_from_state(_load_ast(chat_id)),
+                        infer_thread_from_turns(recent_for_tools),
+                    )
                     memory_context, hits = run_retrieval_pipeline(
                         store,
                         key,
                         current_message=message,
                         recent_turns=recent_for_tools,
-                        task_state={"route": "chat"},
+                        task_state={
+                            "route": _th.get("last_route") or "chat",
+                            "goal": _th.get("last_goal") or message,
+                        },
                         top_k=8,
                         include_raw_top_n=3,
                         max_memory_raw_chars=1800,
@@ -1077,6 +1087,16 @@ async def send_message_stream(body: SendMessageRequest, request: Request):
         custom_sys_text = ""
         if custom_profile:
             custom_sys_text = build_agent_system_prompt(custom_profile, message or "") or ""
+        from agents.agent_state import load_state as _load_ast2, structured_view
+        from memory.thread_context import (
+            format_thread_context,
+            infer_thread_from_turns,
+            merge_thread,
+            thread_from_state,
+        )
+
+        ast = _load_ast2(chat_id) if chat_id else {}
+        thread = merge_thread(thread_from_state(ast), infer_thread_from_turns(raw_hist))
         pack = assemble_turn_context(
             user_message=message or "",
             history=raw_hist,
@@ -1084,6 +1104,8 @@ async def send_message_stream(body: SendMessageRequest, request: Request):
             tool_system=tool_system or "",
             custom_agent_system=custom_sys_text,
             untrusted_tools=bool(ws_q),
+            agent_state_text=structured_view(ast),
+            thread_context_text=format_thread_context(thread),
         )
         sys_final = (pack.system or "").strip() or None
         if (coding_ctx or "").strip():
@@ -1189,6 +1211,14 @@ async def send_message_stream(body: SendMessageRequest, request: Request):
                 recent_turns = read_chat_log(chat_id)[-8:]
             except Exception:
                 recent_turns = []
+        thread = {}
+        try:
+            from agents.agent_state import load_state
+            from memory.thread_context import infer_thread_from_turns, merge_thread, thread_from_state
+
+            thread = merge_thread(thread_from_state(load_state(chat_id)), infer_thread_from_turns(recent_turns))
+        except Exception:
+            thread = {}
         decision = await asyncio.to_thread(
             compute_supervisor_decision,
             api_key,
@@ -1197,6 +1227,7 @@ async def send_message_stream(body: SendMessageRequest, request: Request):
             coding_mode=bool(body.coding_mode),
             coding_project_context=coding_ctx,
             recent_turns=recent_turns,
+            thread=thread,
         )
         agents_plan = decision.get("agents") or []
         if get_run_mode() == "plan":

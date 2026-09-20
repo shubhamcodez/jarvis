@@ -612,6 +612,12 @@ def supervisor_decision(
         thread = infer_thread_from_turns(recent_turns)
 
     llm_body = (llm_user_content or user_message).strip()
+    try:
+        from agents.execution_policy import gui_policy_for_prompt
+
+        llm_body = gui_policy_for_prompt() + "\n\n" + llm_body
+    except Exception:
+        pass
     if thread:
         from memory.thread_context import format_thread_context
 

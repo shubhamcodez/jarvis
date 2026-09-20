@@ -58,3 +58,37 @@ def plan_mode_system_note() -> str:
             "Do not send email, run destructive shell, or write files until the user confirms."
         )
     return ""
+
+
+def gui_is_armed() -> bool:
+    try:
+        from config import is_desktop_armed
+
+        return bool(is_desktop_armed())
+    except Exception:
+        return False
+
+
+def gui_policy_for_prompt() -> str:
+    """Chat/supervisor must follow Settings → Desktop GUI control, not a blanket claim."""
+    armed = gui_is_armed()
+    mode = mode_label()
+    if mode == "plan":
+        return (
+            "GUI POLICY: Plan mode is on, so mouse and keyboard will not run. "
+            "Do not claim you clicked. Settings → Desktop GUI control must also be Armed to use the desktop agent."
+        )
+    if not armed:
+        return (
+            "GUI POLICY: Settings → Desktop GUI control is Off. "
+            "You cannot see or click the user's screen this session. "
+            "If they ask to click, play a site, or control the GUI, tell them to set "
+            "Desktop GUI control to Armed in Settings, then retry. "
+            "Do not invent clicks, moves, or pretend you are driving the desktop."
+        )
+    return (
+        "GUI POLICY: Settings → Desktop GUI control is Armed. "
+        "The desktop specialist can screenshot and click/type. "
+        "Do not say you cannot see or interact with the screen. "
+        "Unfinished desktop goals resume with that specialist, not a chat refusal."
+    )
