@@ -562,11 +562,16 @@ export async function mergeChat(sourceId, targetId = '') {
   })
 }
 
-export async function reactToReply(chatId, vote, excerpt = '') {
+export async function reactToReply(chatId, vote, excerpt = '', messageId = '') {
   return request('/chat/reaction', {
     method: 'POST',
-    body: JSON.stringify({ chat_id: chatId || '', vote, excerpt }),
+    body: JSON.stringify({ chat_id: chatId || '', vote, excerpt, message_id: messageId || '' }),
   })
+}
+
+export async function listChatReactions(chatId) {
+  const q = encodeURIComponent(chatId || '')
+  return request(`/chat/reactions?chat_id=${q}`)
 }
 
 export async function listBookmarks() {

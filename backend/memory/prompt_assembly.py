@@ -139,6 +139,15 @@ def assemble_turn_context(
     except Exception:
         pass
 
+    try:
+        from memory.reactions import format_recent_for_prompt
+
+        rated = format_recent_for_prompt()
+        if rated:
+            stable.append(clip_to_tokens(rated, 220))
+    except Exception:
+        pass
+
     if task_spec_text and task_spec_text.strip():
         dynamic.append("TASK SPECIFICATION (authoritative):\n" + clip_to_tokens(task_spec_text.strip(), 400))
     if agent_state_text and agent_state_text.strip():

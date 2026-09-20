@@ -3490,6 +3490,28 @@
   text-decoration: underline;
 }
 
+.msg-react-btn {
+  text-decoration: none;
+  font-size: 0.95rem;
+  line-height: 1;
+  opacity: 0.55;
+  padding: 0.1rem 0.15rem;
+  border-radius: 4px;
+}
+
+.msg-react-btn:hover:not(:disabled) {
+  opacity: 1;
+  background: var(--repo-tree-file-hover-bg, rgba(255, 255, 255, 0.06));
+}
+
+.msg-react-btn.is-on {
+  opacity: 1;
+}
+
+.msg-react-btn:disabled {
+  cursor: wait;
+}
+
 .activity-heading {
   font-size: 0.75rem;
   text-transform: uppercase;

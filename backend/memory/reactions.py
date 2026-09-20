@@ -1,4 +1,4 @@
-"""Inline thumbs on assistant replies — Claude Code / Cursor request."""
+"""Inline thumbs on assistant replies — stored signal + prompt hint."""
 from __future__ import annotations
 
 import json
@@ -18,17 +18,23 @@ def _path() -> Path:
     return p
 
 
-def add_reaction(chat_id: str, vote: str, excerpt: str = "") -> dict[str, Any]:
+def _norm_vote(vote: str) -> str:
     v = (vote or "").strip().lower()
     if v in ("up", "yes", "+", "1", "good"):
-        v = "up"
-    elif v in ("down", "no", "-", "0", "bad"):
-        v = "down"
-    else:
+        return "up"
+    if v in ("down", "no", "-", "0", "bad"):
+        return "down"
+    return ""
+
+
+def add_reaction(chat_id: str, vote: str, excerpt: str = "", message_id: str = "") -> dict[str, Any]:
+    v = _norm_vote(vote)
+    if not v:
         return {"ok": False, "error": "vote must be up or down"}
     rec = {
         "ts": time.time(),
         "chat_id": chat_id or "",
+        "message_id": (message_id or "")[:80],
         "vote": v,
         "excerpt": (excerpt or "")[:400],
     }
@@ -39,11 +45,63 @@ def add_reaction(chat_id: str, vote: str, excerpt: str = "") -> dict[str, Any]:
         try:
             from memory.facts import add_fact
 
-            add_fact(
-                "User marked a recent assistant reply as unhelpful. Prefer a different approach next time.",
-                key="reaction_down",
-                source="reaction",
-            )
+            note = (excerpt or "").strip().replace("\n", " ")
+            text = "User marked a recent assistant reply as unhelpful."
+            if note:
+                text += f" Excerpt: {note[:180]}"
+            text += " Prefer a different approach next time."
+            add_fact(text, key="reaction_down", source="reaction")
         except Exception:
             pass
-    return {"ok": True, "vote": v}
+    return {"ok": True, "vote": v, "excerpt": rec["excerpt"]}
+
+
+def _iter_records() -> list[dict[str, Any]]:
+    path = _path()
+    if not path.is_file():
+        return []
+    out: list[dict[str, Any]] = []
+    try:
+        for line in path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(rec, dict):
+                out.append(rec)
+    except OSError:
+        return []
+    return out
+
+
+def votes_for_chat(chat_id: str) -> dict[str, str]:
+    """Latest vote keyed by excerpt (first 240 chars) for this chat."""
+    cid = (chat_id or "").strip()
+    latest: dict[str, str] = {}
+    for rec in _iter_records():
+        if cid and (rec.get("chat_id") or "") != cid:
+            continue
+        key = (rec.get("excerpt") or "")[:240]
+        vote = _norm_vote(str(rec.get("vote") or ""))
+        if key and vote:
+            latest[key] = vote
+    return latest
+
+
+def format_recent_for_prompt(limit: int = 8) -> str:
+    recs = _iter_records()[-limit:]
+    if not recs:
+        return ""
+    lines = ["USER REPLY RATINGS (thumbs):"]
+    for rec in recs:
+        vote = _norm_vote(str(rec.get("vote") or ""))
+        mark = "helpful" if vote == "up" else "unhelpful" if vote == "down" else vote
+        note = (rec.get("excerpt") or "").replace("\n", " ").strip()[:160]
+        if note:
+            lines.append(f"- {mark}: {note}")
+        else:
+            lines.append(f"- {mark}")
+    return "\n".join(lines)

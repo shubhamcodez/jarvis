@@ -53,6 +53,7 @@ import {
   runSlash,
   rewindChat,
   reactToReply,
+  listChatReactions,
   listBookmarks,
   addBookmark,
   deleteBookmark,
@@ -889,6 +890,8 @@ function App() {
   const [chatSearchHits, setChatSearchHits] = useState([])
   const chatSearchTimerRef = useRef(null)
   const [bookmarks, setBookmarks] = useState([])
+  const [messageVotes, setMessageVotes] = useState({})
+  const [reactionBusyKey, setReactionBusyKey] = useState('')
   const [usageStats, setUsageStats] = useState(null)
   const [customAgents, setCustomAgents] = useState([])
   const [activeAgentId, setActiveAgentId] = useState(null)
@@ -1497,6 +1500,12 @@ function App() {
       setCurrentChatIdState(chatId)
       const msgs = await readChatLog(chatId)
       setMessages(msgs || [])
+      try {
+        const rated = await listChatReactions(chatId)
+        setMessageVotes(rated?.votes && typeof rated.votes === 'object' ? rated.votes : {})
+      } catch {
+        setMessageVotes({})
+      }
       try {
         const meta = await getChatMeta(chatId)
         setChatMeta(meta)
@@ -3216,34 +3225,49 @@ function App() {
                 </div>
                 <div className="msg-bot-actions">
                   <CopyResponseButton text={msg.content} />
-                  <button
-                    type="button"
-                    className="msg-pin-btn"
-                    title="This reply helped"
-                    onClick={async () => {
+                  {(() => {
+                    const excerpt = (msg.content || '').slice(0, 240)
+                    const vote = messageVotes[excerpt]
+                    const busy = reactionBusyKey === excerpt
+                    const rate = async (next) => {
+                      setReactionBusyKey(excerpt)
+                      setMessageVotes((prev) => ({ ...prev, [excerpt]: next }))
                       try {
-                        await reactToReply(currentChatId || '', 'up', (msg.content || '').slice(0, 240))
-                      } catch {
-                        /* ignore */
+                        await reactToReply(currentChatId || '', next, excerpt, msg.id || '')
+                      } catch (e) {
+                        setMessageVotes((prev) => {
+                          const copy = { ...prev }
+                          delete copy[excerpt]
+                          return copy
+                        })
+                        alert(e?.message || 'Could not save that rating.')
+                      } finally {
+                        setReactionBusyKey('')
                       }
-                    }}
-                  >
-                    👍
-                  </button>
-                  <button
-                    type="button"
-                    className="msg-pin-btn"
-                    title="This reply missed"
-                    onClick={async () => {
-                      try {
-                        await reactToReply(currentChatId || '', 'down', (msg.content || '').slice(0, 240))
-                      } catch {
-                        /* ignore */
-                      }
-                    }}
-                  >
-                    👎
-                  </button>
+                    }
+                    return (
+                      <>
+                        <button
+                          type="button"
+                          className={`msg-pin-btn msg-react-btn${vote === 'up' ? ' is-on' : ''}`}
+                          title="This reply helped — Jarvis keeps it in mind"
+                          disabled={busy}
+                          onClick={() => rate('up')}
+                        >
+                          👍
+                        </button>
+                        <button
+                          type="button"
+                          className={`msg-pin-btn msg-react-btn${vote === 'down' ? ' is-on' : ''}`}
+                          title="This reply missed — Jarvis notes it and tries another approach"
+                          disabled={busy}
+                          onClick={() => rate('down')}
+                        >
+                          👎
+                        </button>
+                      </>
+                    )
+                  })()}
                   <button
                     type="button"
                     className="msg-pin-btn"

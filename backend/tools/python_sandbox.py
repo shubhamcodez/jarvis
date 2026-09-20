@@ -104,7 +104,9 @@ def run_sandboxed_python(
     stdout = ""
     stderr = ""
     try:
-        proc = subprocess.Popen(
+        from tools.win_subprocess import popen_hidden
+
+        proc = popen_hidden(
             argv,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,

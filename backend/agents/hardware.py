@@ -8,17 +8,24 @@ import re
 import shutil
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 from typing import Any
 
 _CACHE: dict[str, Any] | None = None
 _CACHE_AT = 0.0
+_DETECT_LOCK = threading.Lock()
+_PROBE_LOCK = threading.Lock()
+_PROBE_RUNNING = False
+_CACHE_TTL_SEC = 300.0
 
 
 def _run(cmd: list[str], timeout: float = 12) -> str:
     try:
-        p = subprocess.run(
+        from tools.win_subprocess import run_hidden
+
+        p = run_hidden(
             cmd,
             capture_output=True,
             text=True,
@@ -37,7 +44,10 @@ def _ps(script: str, timeout: float = 15) -> str:
     exe = shutil.which("powershell") or shutil.which("pwsh")
     if not exe:
         return ""
-    return _run([exe, "-NoProfile", "-NonInteractive", "-Command", script], timeout=timeout)
+    return _run(
+        [exe, "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-Command", script],
+        timeout=timeout,
+    )
 
 
 def _gb(nbytes: float | int | None) -> float | None:
@@ -163,8 +173,38 @@ def _amd_rocm_gpus() -> list[dict[str, Any]]:
     return out
 
 
+def _win_ram_ctypes() -> float | None:
+    """RAM via kernel32 — no console, no PowerShell."""
+    try:
+        import ctypes
+
+        class MEMORYSTATUSEX(ctypes.Structure):
+            _fields_ = [
+                ("dwLength", ctypes.c_ulong),
+                ("dwMemoryLoad", ctypes.c_ulong),
+                ("ullTotalPhys", ctypes.c_ulonglong),
+                ("ullAvailPhys", ctypes.c_ulonglong),
+                ("ullTotalPageFile", ctypes.c_ulonglong),
+                ("ullAvailPageFile", ctypes.c_ulonglong),
+                ("ullTotalVirtual", ctypes.c_ulonglong),
+                ("ullAvailVirtual", ctypes.c_ulonglong),
+                ("ullAvailExtendedVirtual", ctypes.c_ulonglong),
+            ]
+
+        stat = MEMORYSTATUSEX()
+        stat.dwLength = ctypes.sizeof(MEMORYSTATUSEX)
+        if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(stat)):
+            return _gb(stat.ullTotalPhys)
+    except Exception:
+        return None
+    return None
+
+
 def _system_ram_gb() -> float | None:
     if sys.platform == "win32":
+        ram = _win_ram_ctypes()
+        if ram:
+            return ram
         raw = _ps("(Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory")
         try:
             return _gb(float(raw.splitlines()[0].strip()))
@@ -486,58 +526,131 @@ def _runtime_hint(devices: list[dict[str, Any]]) -> str:
     return "ubuntu-cpu-x64"
 
 
-def detect_hardware(*, force: bool = False) -> dict[str, Any]:
-    """Probe this machine. Safe on any OS; used at packaged first launch."""
-    global _CACHE, _CACHE_AT
-    if _CACHE and not force and (time.time() - _CACHE_AT) < 45:
-        return _CACHE
-
-    devices: list[dict[str, Any]] = []
-    devices.extend(_nvidia_gpus())
-    devices.extend(_amd_rocm_gpus())
-    nvidia_names = {re.sub(r"\s+", " ", d["name"].lower()) for d in devices if d.get("vendor") == "nvidia"}
-
-    if sys.platform == "win32":
-        for d in _win_video_controllers():
-            key = re.sub(r"\s+", " ", d["name"].lower())
-            if any(n in key or key in n for n in nvidia_names):
-                continue
-            devices.append(d)
-        devices.extend(_win_npus())
-    elif sys.platform == "darwin":
-        devices.extend(_macos_displays())
-    else:
-        if not any(d.get("source") == "nvidia-smi" for d in devices):
-            devices.extend(_linux_sysfs_gpus())
-        devices.extend(_linux_npus())
-
-    devices = _dedupe(devices)
-    ram_gb = _system_ram_gb()
-    usable_gb, usable_from = _usable_gb(devices, ram_gb)
-    for d in devices:
-        if d.get("memory_gb") is None and d.get("memory_shared") and ram_gb:
-            d["memory_gb_estimate"] = round(min(8.0, ram_gb * 0.25), 2)
-
-    result = {
+def _pending_hardware() -> dict[str, Any]:
+    ram = _win_ram_ctypes() if sys.platform == "win32" else None
+    return {
         "os": f"{platform.system()} {platform.release()}".strip(),
         "arch": platform.machine(),
         "cpu": platform.processor() or None,
-        "system_ram_gb": ram_gb,
-        "devices": devices,
-        "has_gpu": any(d.get("kind") == "gpu" for d in devices),
-        "has_npu": any(d.get("kind") == "npu" for d in devices),
-        "usable_memory_gb": usable_gb,
-        "usable_from": usable_from,
-        "accelerator_count": sum(1 for d in devices if d.get("kind") in ("gpu", "npu")),
-        "recommended_runtime": _runtime_hint(devices),
+        "system_ram_gb": ram,
+        "devices": [],
+        "has_gpu": False,
+        "has_npu": False,
+        "usable_memory_gb": ram,
+        "usable_from": "pending",
+        "accelerator_count": 0,
+        "recommended_runtime": None,
+        "probe": "pending",
     }
-    _CACHE = result
-    _CACHE_AT = time.time()
+
+
+def _read_disk_cache() -> dict[str, Any] | None:
     try:
         from config import data_root
 
         path = data_root() / "hardware.json"
-        path.write_text(json.dumps(result, indent=2), encoding="utf-8")
+        if not path.is_file():
+            return None
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) and data else None
     except Exception:
-        pass
-    return result
+        return None
+
+
+def hardware_snapshot(*, refresh: bool = True) -> dict[str, Any]:
+    """Return last GPU/RAM probe immediately. Refresh runs in a hidden background thread."""
+    global _CACHE, _CACHE_AT
+    if _CACHE is None:
+        disk = _read_disk_cache()
+        if disk:
+            _CACHE = disk
+            _CACHE_AT = time.time()
+    if refresh:
+        stale = _CACHE is None or (time.time() - _CACHE_AT) >= _CACHE_TTL_SEC
+        pending = bool(_CACHE and _CACHE.get("probe") == "pending")
+        if stale or pending:
+            schedule_hardware_probe()
+    return _CACHE or _pending_hardware()
+
+
+def schedule_hardware_probe() -> None:
+    """Start one silent probe thread. Never blocks the caller."""
+    global _PROBE_RUNNING
+    with _PROBE_LOCK:
+        if _PROBE_RUNNING:
+            return
+        _PROBE_RUNNING = True
+
+    def _run() -> None:
+        global _PROBE_RUNNING
+        try:
+            detect_hardware(force=True)
+        except Exception:
+            pass
+        finally:
+            with _PROBE_LOCK:
+                _PROBE_RUNNING = False
+
+    threading.Thread(target=_run, name="jarvis-hw-probe", daemon=True).start()
+
+
+def detect_hardware(*, force: bool = False) -> dict[str, Any]:
+    """Probe this machine. Call from a background thread — this can spawn nvidia-smi / CIM."""
+    global _CACHE, _CACHE_AT
+    if not force:
+        snap = hardware_snapshot(refresh=True)
+        if snap.get("probe") != "pending" and _CACHE and (time.time() - _CACHE_AT) < _CACHE_TTL_SEC:
+            return snap
+    with _DETECT_LOCK:
+        if _CACHE and not force and (time.time() - _CACHE_AT) < _CACHE_TTL_SEC and _CACHE.get("probe") != "pending":
+            return _CACHE
+
+        devices: list[dict[str, Any]] = []
+        devices.extend(_nvidia_gpus())
+        devices.extend(_amd_rocm_gpus())
+        nvidia_names = {re.sub(r"\s+", " ", d["name"].lower()) for d in devices if d.get("vendor") == "nvidia"}
+
+        if sys.platform == "win32":
+            for d in _win_video_controllers():
+                key = re.sub(r"\s+", " ", d["name"].lower())
+                if any(n in key or key in n for n in nvidia_names):
+                    continue
+                devices.append(d)
+            devices.extend(_win_npus())
+        elif sys.platform == "darwin":
+            devices.extend(_macos_displays())
+        else:
+            if not any(d.get("source") == "nvidia-smi" for d in devices):
+                devices.extend(_linux_sysfs_gpus())
+            devices.extend(_linux_npus())
+
+        devices = _dedupe(devices)
+        ram_gb = _system_ram_gb()
+        usable_gb, usable_from = _usable_gb(devices, ram_gb)
+        for d in devices:
+            if d.get("memory_gb") is None and d.get("memory_shared") and ram_gb:
+                d["memory_gb_estimate"] = round(min(8.0, ram_gb * 0.25), 2)
+
+        result = {
+            "os": f"{platform.system()} {platform.release()}".strip(),
+            "arch": platform.machine(),
+            "cpu": platform.processor() or None,
+            "system_ram_gb": ram_gb,
+            "devices": devices,
+            "has_gpu": any(d.get("kind") == "gpu" for d in devices),
+            "has_npu": any(d.get("kind") == "npu" for d in devices),
+            "usable_memory_gb": usable_gb,
+            "usable_from": usable_from,
+            "accelerator_count": sum(1 for d in devices if d.get("kind") in ("gpu", "npu")),
+            "recommended_runtime": _runtime_hint(devices),
+        }
+        _CACHE = result
+        _CACHE_AT = time.time()
+        try:
+            from config import data_root
+
+            path = data_root() / "hardware.json"
+            path.write_text(json.dumps(result, indent=2), encoding="utf-8")
+        except Exception:
+            pass
+        return result

@@ -9,6 +9,19 @@ use tauri::Manager;
 
 struct BackendChild(Mutex<Option<Child>>);
 
+fn hide_console(cmd: &mut Command) {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = cmd;
+    }
+}
+
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
@@ -34,6 +47,7 @@ fn spawn_dev_backend() -> std::io::Result<Child> {
         .env("ADA_PACKAGED", "0")
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    hide_console(&mut cmd);
     cmd.spawn()
 }
 
@@ -73,6 +87,7 @@ fn spawn_packaged_backend(app: &tauri::AppHandle) -> std::io::Result<Child> {
         .env("PORT", "8000")
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    hide_console(&mut cmd);
     cmd.spawn()
 }
 

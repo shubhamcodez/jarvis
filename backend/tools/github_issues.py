@@ -31,7 +31,9 @@ def fetch_issue(text: str, *, timeout_sec: float = 20.0) -> dict[str, Any]:
     if ref["repo"]:
         cmd.extend(["--repo", ref["repo"]])
     try:
-        proc = subprocess.run(
+        from tools.win_subprocess import run_hidden
+
+        proc = run_hidden(
             cmd,
             capture_output=True,
             text=True,

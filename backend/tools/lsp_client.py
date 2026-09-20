@@ -49,7 +49,9 @@ class LspClient:
         self._id = 0
         self._pending: dict[int, dict[str, Any]] = {}
         self.diagnostics: dict[str, list[dict[str, Any]]] = {}
-        self.proc = subprocess.Popen(
+        from tools.win_subprocess import popen_hidden
+
+        self.proc = popen_hidden(
             cmd,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,

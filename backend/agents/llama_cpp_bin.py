@@ -33,9 +33,9 @@ def _is_arm64() -> bool:
 
 def _hw_devices() -> list[dict[str, Any]]:
     try:
-        from agents.hardware import detect_hardware
+        from agents.hardware import hardware_snapshot
 
-        return list(detect_hardware().get("devices") or [])
+        return list(hardware_snapshot().get("devices") or [])
     except Exception:
         return []
 
@@ -43,9 +43,9 @@ def _hw_devices() -> list[dict[str, Any]]:
 def _asset_preferences() -> list[str]:
     """Ordered llama.cpp asset name fragments for this machine."""
     try:
-        from agents.hardware import detect_hardware
+        from agents.hardware import hardware_snapshot
 
-        hint = str(detect_hardware().get("recommended_runtime") or "")
+        hint = str(hardware_snapshot().get("recommended_runtime") or "")
     except Exception:
         hint = ""
     devices = _hw_devices()
@@ -254,7 +254,9 @@ def start_server(model_path: str, n_ctx: int = 4096) -> str:
         str(n_ctx),
         "--jinja",
     ]
-    _PROC = subprocess.Popen(
+    from tools.win_subprocess import popen_hidden
+
+    _PROC = popen_hidden(
         args,
         cwd=str(exe.parent),
         stdout=subprocess.DEVNULL,

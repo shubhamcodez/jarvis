@@ -1683,13 +1683,21 @@ class ReactionRequest(BaseModel):
     chat_id: str = ""
     vote: str
     excerpt: str = ""
+    message_id: str = ""
 
 
 @app.post("/chat/reaction")
 async def api_reaction(body: ReactionRequest):
     from memory.reactions import add_reaction
 
-    return add_reaction(body.chat_id, body.vote, body.excerpt)
+    return add_reaction(body.chat_id, body.vote, body.excerpt, body.message_id)
+
+
+@app.get("/chat/reactions")
+async def api_list_reactions(chat_id: str = ""):
+    from memory.reactions import votes_for_chat
+
+    return {"ok": True, "votes": votes_for_chat(chat_id)}
 
 
 @app.get("/bookmarks")
@@ -1969,9 +1977,9 @@ async def api_local_models_load(body: LocalModelRequest):
 async def api_get_runtime():
     hw = {}
     try:
-        from agents.hardware import detect_hardware
+        from agents.hardware import hardware_snapshot
 
-        hw = await asyncio.to_thread(detect_hardware)
+        hw = hardware_snapshot()
     except Exception:
         hw = {}
     return {
@@ -2690,9 +2698,9 @@ async def api_tools_shell(body: ShellRunRequest):
 async def health():
     hw: dict = {}
     try:
-        from agents.hardware import detect_hardware
+        from agents.hardware import hardware_snapshot
 
-        raw = await asyncio.to_thread(detect_hardware)
+        raw = hardware_snapshot()
         hw = {
             "os": raw.get("os"),
             "arch": raw.get("arch"),

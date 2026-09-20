@@ -120,7 +120,9 @@ def search_with_ripgrep(
     cmd.append(str(root))
 
     try:
-        proc = subprocess.run(
+        from tools.win_subprocess import run_hidden
+
+        proc = run_hidden(
             cmd,
             capture_output=True,
             text=True,

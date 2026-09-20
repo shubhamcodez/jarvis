@@ -149,6 +149,51 @@ class OauthStoreEncryptTests(unittest.TestCase):
                 self.assertEqual(loaded["users"]["sub1"]["tokens"]["access_token"], "tok")
 
 
+class ReactionTests(unittest.TestCase):
+    def test_up_down_roundtrip(self):
+        with tempfile.TemporaryDirectory() as td:
+            with patch("memory.reactions.data_root", return_value=Path(td)), patch(
+                "memory.facts.data_root", return_value=Path(td)
+            ):
+                from memory.reactions import add_reaction, format_recent_for_prompt, votes_for_chat
+
+                self.assertTrue(add_reaction("c1", "up", "hello world")["ok"])
+                self.assertTrue(add_reaction("c1", "down", "bad answer")["ok"])
+                votes = votes_for_chat("c1")
+                self.assertEqual(votes.get("hello world"), "up")
+                self.assertEqual(votes.get("bad answer"), "down")
+                self.assertIn("unhelpful", format_recent_for_prompt())
+
+
+class HardwareSnapshotTests(unittest.TestCase):
+    def test_snapshot_does_not_spawn_probe(self):
+        import agents.hardware as hw
+
+        with patch.object(hw, "schedule_hardware_probe") as sched, patch.object(
+            hw, "_read_disk_cache", return_value=None
+        ), patch.object(hw, "_run") as run, patch.object(hw, "_ps") as ps:
+            hw._CACHE = None
+            hw._CACHE_AT = 0.0
+            snap = hw.hardware_snapshot(refresh=True)
+            self.assertIsInstance(snap, dict)
+            sched.assert_called_once()
+            run.assert_not_called()
+            ps.assert_not_called()
+            hw._CACHE = None
+
+
+class HiddenSubprocessTests(unittest.TestCase):
+    def test_hidden_kwargs_on_windows(self):
+        from tools.win_subprocess import hidden_popen_kwargs
+
+        kwargs = hidden_popen_kwargs()
+        if __import__("sys").platform == "win32":
+            self.assertIn("creationflags", kwargs)
+            self.assertIn("startupinfo", kwargs)
+        else:
+            self.assertEqual(kwargs, {})
+
+
 class WorkspaceTreeListTests(unittest.TestCase):
     def test_list_tree_paths_includes_hidden_and_dirs(self):
         with tempfile.TemporaryDirectory() as td:

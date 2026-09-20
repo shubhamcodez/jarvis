@@ -7,7 +7,7 @@ import time
 from pathlib import Path
 from typing import Any, Optional
 
-from agents.hardware import detect_hardware
+from agents.hardware import hardware_snapshot
 from config import data_root
 
 # Single-file GGUF where possible (bartowski / HuggingFaceTB). min_vram includes KV + runtime slop.
@@ -237,7 +237,7 @@ def _best_for_gb(usable_gb: float) -> dict[str, Any]:
 
 
 def recommend(hw: dict[str, Any] | None = None) -> dict[str, Any]:
-    hw = hw or detect_hardware()
+    hw = hw or hardware_snapshot()
     usable = float(hw.get("usable_memory_gb") or 2.0)
     suggested = _best_for_gb(usable)
     per_device: list[dict[str, Any]] = []

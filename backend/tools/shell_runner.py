@@ -232,7 +232,7 @@ def run_shell_command(
         exe = shutil.which("pwsh" if mode == "pwsh" else "powershell") or (
             "pwsh" if mode == "pwsh" else "powershell"
         )
-        argv = [exe, "-NoProfile", "-NonInteractive", "-Command", command]
+        argv = [exe, "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-Command", command]
     elif mode == "bash":
         bash = shutil.which("bash") or "bash"
         argv = [bash, "-lc", command]
@@ -241,7 +241,9 @@ def run_shell_command(
         argv = [exe, "-c", command]
 
     try:
-        proc = subprocess.Popen(
+        from tools.win_subprocess import popen_hidden
+
+        proc = popen_hidden(
             argv,
             cwd=str(cwd),
             stdout=subprocess.PIPE,

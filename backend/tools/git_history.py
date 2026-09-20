@@ -28,7 +28,9 @@ def _run(root: str | Path, args: list[str], timeout_sec: float = 8.0) -> dict[st
         return {"ok": False, "error": "workspace is not a directory"}
     cmd = ["git", "-c", "safe.directory=*", *args]
     try:
-        proc = subprocess.run(
+        from tools.win_subprocess import run_hidden
+
+        proc = run_hidden(
             cmd,
             cwd=str(cwd),
             capture_output=True,

@@ -108,7 +108,9 @@ def run_python_tests(
     try:
         workspace.materialize(dest, include_all=include_all)
         cmd = discover_test_command(dest, path)
-        proc = subprocess.run(
+        from tools.win_subprocess import run_hidden
+
+        proc = run_hidden(
             cmd,
             cwd=str(dest),
             capture_output=True,
