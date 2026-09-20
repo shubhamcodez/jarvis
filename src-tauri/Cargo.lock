@@ -3,7 +3,7 @@
 version = 4
 
 [[package]]
-name = "ada"
+name = "jarvis"
 version = "0.1.0"
 dependencies = [
  "rfd",

@@ -1,17 +1,26 @@
-# Build Ada_x.y.z_x64-setup.exe (NSIS). Requires: Node, Poetry, Rust, Python 3.11+.
+# Build Jarvis_x.y.z_x64-setup.exe (NSIS). Requires: Node, Poetry, Rust, Python 3.11+.
 # Usage (from repo root):  powershell -ExecutionPolicy Bypass -File scripts/build-windows.ps1
 $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent $PSScriptRoot
 Set-Location $Root
 
-Write-Host "==> Icons"
+Write-Host "==> Poetry deps"
 Push-Location "$Root\backend"
-poetry run python "$Root\scripts\make_tauri_icons.py"
+poetry install --no-interaction --with dev --no-root
 Pop-Location
+
+$iconIco = Join-Path $Root "src-tauri\icons\icon.ico"
+if (-not (Test-Path $iconIco)) {
+  Write-Host "==> Icons"
+  Push-Location "$Root\backend"
+  poetry run python "$Root\scripts\make_tauri_icons.py"
+  Pop-Location
+} else {
+  Write-Host "==> Icons (already present)"
+}
 
 Write-Host "==> PyInstaller sidecar"
 Push-Location "$Root\backend"
-poetry add --group dev pyinstaller 2>$null
 poetry run pyinstaller --noconfirm jarvis-backend.spec
 Pop-Location
 

@@ -8,10 +8,13 @@ block_cipher = None
 here = Path(SPECPATH)
 
 datas = []
-for name in ("jarvis-config.yaml",):
+for name in ("jarvis-config.yaml", "ada-config.yaml"):
     p = here / name
     if p.exists():
         datas.append((str(p), "."))
+worker = here / "tools" / "sandbox_worker.py"
+if worker.exists():
+    datas.append((str(worker), "tools"))
 
 hidden = []
 for pkg in (
@@ -35,6 +38,13 @@ for pkg in (
     "websockets",
     "multipart",
     "dotenv",
+    "agents",
+    "memory",
+    "tools",
+    "auth",
+    "custom_agents",
+    "observability",
+    "integrations",
 ):
     try:
         hidden += collect_submodules(pkg)
@@ -42,7 +52,7 @@ for pkg in (
         pass
 
 a = Analysis(
-    [str(here / "ada_sidecar.py")],
+    [str(here / "jarvis_sidecar.py")],
     pathex=[str(here)],
     binaries=[],
     datas=datas,

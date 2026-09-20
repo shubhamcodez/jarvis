@@ -75,7 +75,8 @@ def run_sandboxed_python(
         t = DEFAULT_TIMEOUT_SEC
     t = max(1.0, min(t, MAX_TIMEOUT_SEC))
 
-    if not WORKER.is_file():
+    frozen = bool(getattr(sys, "frozen", False))
+    if not frozen and not WORKER.is_file():
         return {"ok": False, "error": "sandbox_worker.py missing"}
 
     scratch = tempfile.mkdtemp(prefix="ada-sandbox-")
@@ -91,15 +92,20 @@ def run_sandboxed_python(
         "MPLBACKEND": "Agg",
         "PYTHONNOUSERSITE": "1",
         "ADA_SANDBOX": "1",
+        "JARVIS_SANDBOX": "1",
     }
+    if frozen:
+        env["ADA_SANDBOX_WORKER"] = "1"
+        env["JARVIS_SANDBOX_WORKER"] = "1"
     env = {k: v for k, v in env.items() if v}
+    argv = [sys.executable] if frozen else [sys.executable, str(WORKER)]
 
     proc = None
     stdout = ""
     stderr = ""
     try:
         proc = subprocess.Popen(
-            [sys.executable, str(WORKER)],
+            argv,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,

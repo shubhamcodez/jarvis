@@ -1,12 +1,12 @@
 [package]
-name = "ada"
+name = "jarvis"
 version = "0.1.0"
 description = "Jarvis desktop shell"
 authors = ["Jarvis"]
 edition = "2021"
 
 [lib]
-name = "ada_lib"
+name = "jarvis_lib"
 crate-type = ["lib", "cdylib", "staticlib"]
 
 [build-dependencies]

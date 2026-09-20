@@ -16,6 +16,10 @@ def _platform_data_dir() -> Path:
     return Path(xdg) / "Jarvis" if xdg else Path.home() / ".local" / "share" / "Jarvis"
 
 
+def _truthy(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in ("1", "true", "yes", "on")
+
+
 def _prepare_env() -> None:
     frozen = getattr(sys, "frozen", False)
     if frozen:
@@ -32,6 +36,11 @@ def _prepare_env() -> None:
 
 
 def main() -> None:
+    if _truthy("JARVIS_SANDBOX_WORKER") or _truthy("ADA_SANDBOX_WORKER"):
+        from tools.sandbox_worker import main as worker_main
+
+        worker_main()
+        return
     _prepare_env()
     import uvicorn
 
