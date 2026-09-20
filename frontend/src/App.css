@@ -846,96 +846,155 @@
   max-height: min(220px, 28vh);
   overflow-y: auto;
   overflow-x: hidden;
-  padding: 0.25rem 0 0.45rem;
-  font-family: ui-monospace, 'Consolas', 'Monaco', monospace;
-  font-size: 0.6875rem;
-  line-height: 1.45;
+  padding: 0.15rem 0 0.4rem;
+  font-family: 'Segoe UI', system-ui, sans-serif;
+  font-size: 0.8125rem;
+  line-height: 1.35;
 }
 
 .repo-file-tree__root-row {
   display: flex;
   align-items: center;
-  gap: 0.15rem;
-  padding: 0.15rem 0.45rem 0.1rem;
+  gap: 0.2rem;
+  padding: 0.12rem 0.4rem;
+  min-height: 1.4rem;
+  cursor: pointer;
   user-select: none;
+}
+
+.repo-file-tree__root-row:hover,
+.repo-file-tree__row:hover {
+  background: var(--repo-tree-file-hover-bg);
 }
 
 .repo-file-tree__root-name {
   font-weight: 650;
   color: var(--repo-tree-folder);
-  letter-spacing: 0.02em;
+  letter-spacing: 0.01em;
+  text-transform: uppercase;
+  font-size: 0.6875rem;
 }
 
 .repo-file-tree__row {
   display: flex;
   align-items: center;
-  gap: 0.12rem;
-  min-height: 1.35rem;
-  padding-right: 0.35rem;
+  gap: 0.2rem;
+  min-height: 1.4rem;
+  padding-right: 0.4rem;
+  cursor: pointer;
   user-select: none;
 }
 
+.repo-file-tree__row.is-active {
+  background: color-mix(in srgb, var(--repo-tree-file-hover-bg) 80%, #3d6ea8);
+}
+
 .repo-file-tree__row--file .repo-file-tree__name {
-  color: var(--repo-tree-file-muted);
+  color: var(--repo-tree-file);
   font-weight: 400;
 }
 
 .repo-file-tree__chev {
   flex-shrink: 0;
-  width: 1.35rem;
-  height: 1.35rem;
-  padding: 0;
-  margin: 0;
-  border: none;
-  border-radius: 4px;
-  background: transparent;
+  width: 0.85rem;
+  height: 1.4rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   color: var(--repo-tree-chev);
-  font-size: 0.55rem;
+  font-size: 0.5rem;
   line-height: 1;
-  cursor: pointer;
-  font-family: inherit;
-}
-
-.repo-file-tree__chev:hover {
-  background: var(--repo-tree-chev-hover-bg);
-  color: var(--repo-tree-chev-hover-fg);
 }
 
 .repo-file-tree__chev-spacer {
-  width: 1.35rem;
+  width: 0.85rem;
   flex-shrink: 0;
+}
+
+.repo-file-tree__icon {
+  flex-shrink: 0;
+  width: 16px;
+  height: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.55rem;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.repo-file-tree__icon--folder {
+  color: #dcb67a;
+}
+
+.repo-file-tree__icon--folder.is-open {
+  color: #e8c58a;
+}
+
+.repo-file-tree__icon--env {
+  color: #89d185;
+}
+
+.repo-file-tree__icon--git {
+  color: #f14c4c;
+}
+
+.repo-file-tree__icon--md {
+  color: #519aba;
+}
+
+.repo-file-tree__icon--json {
+  color: #cbcb41;
+}
+
+.repo-file-tree__icon--py {
+  color: #3572a5;
+}
+
+.repo-file-tree__icon--js {
+  color: #cbcb41;
+}
+
+.repo-file-tree__icon--css {
+  color: #519aba;
+}
+
+.repo-file-tree__icon--html {
+  color: #e37933;
+}
+
+.repo-file-tree__icon--img {
+  color: #a074c4;
+}
+
+.repo-file-tree__icon--yml,
+.repo-file-tree__icon--toml {
+  color: #cb171e;
+}
+
+.repo-file-tree__icon--docker {
+  color: #2496ed;
+}
+
+.repo-file-tree__icon--file {
+  color: var(--repo-tree-file-muted);
+}
+
+.repo-file-tree__name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .repo-file-tree__name--dir {
   color: var(--repo-tree-folder);
-  font-weight: 550;
+  font-weight: 500;
 }
 
 .repo-file-tree__name--file {
   color: var(--repo-tree-file);
   font-weight: 400;
-}
-
-.repo-file-tree__file-btn {
-  flex: 1;
-  min-width: 0;
-  padding: 0;
-  margin: 0;
-  border: none;
-  background: transparent;
-  font: inherit;
-  font-size: inherit;
-  line-height: inherit;
-  text-align: left;
-  color: var(--repo-tree-file);
-  font-weight: 400;
-  cursor: pointer;
-  border-radius: 4px;
-}
-
-.repo-file-tree__file-btn:hover {
-  color: var(--repo-tree-file-hover);
-  background: var(--repo-tree-file-hover-bg);
 }
 
 .repo-context-tree-empty {

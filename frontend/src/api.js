@@ -488,6 +488,10 @@ export async function fetchWorkspaceSnapshot() {
   return request('/workspace/snapshot', { method: 'POST' })
 }
 
+export async function listWorkspaceFiles() {
+  return request('/workspace/list')
+}
+
 export async function readWorkspaceFile(relPath) {
   const q = encodeURIComponent(relPath || '')
   return request(`/workspace/file?rel_path=${q}`)

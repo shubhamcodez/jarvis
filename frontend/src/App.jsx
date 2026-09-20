@@ -36,6 +36,7 @@ import {
   linkWorkspace,
   unlinkWorkspace,
   fetchWorkspaceSnapshot,
+  listWorkspaceFiles,
   readWorkspaceFile,
   writeWorkspaceFile,
   listPendingApprovals,
@@ -1377,6 +1378,27 @@ function App() {
     try {
       const ws = await getWorkspaceStatus()
       setWorkspaceDiskPath(ws?.linked ? ws.path || '' : '')
+      if (ws?.linked) {
+        const listed = await listWorkspaceFiles()
+        if (listed?.ok && Array.isArray(listed.paths) && listed.paths.length) {
+          setWorkspaceRelPaths(listed.paths)
+          try {
+            sessionStorage.setItem('jarvis-workspace-paths', JSON.stringify(listed.paths))
+          } catch {
+            /* ignore */
+          }
+          if (ws.label) {
+            setWorkspaceLocalLabel((prev) => prev || ws.label)
+            try {
+              if (!sessionStorage.getItem('jarvis-workspace-local-label')) {
+                sessionStorage.setItem('jarvis-workspace-local-label', ws.label)
+              }
+            } catch {
+              /* ignore */
+            }
+          }
+        }
+      }
     } catch {
       /* ignore */
     }
@@ -1900,6 +1922,17 @@ function App() {
           if (body != null) source = 'cache'
         }
         if (body == null) {
+          try {
+            const remote = await readWorkspaceFile(relPath)
+            if (remote?.ok && remote.content != null) {
+              body = remote.content
+              source = 'workspace'
+            }
+          } catch {
+            /* ignore */
+          }
+        }
+        if (body == null) {
           setFilePreview({
             relPath,
             title,
@@ -2182,6 +2215,43 @@ function App() {
     }
   }, [workspaceSnapshot, workspaceLocalLabel, workspaceRelPaths.length])
 
+  useEffect(() => {
+    if (!codingModeEnabled) return
+    if (workspaceRelPaths.length > 0) return
+    let cancelled = false
+    ;(async () => {
+      try {
+        const ws = await getWorkspaceStatus()
+        if (cancelled || !ws?.linked) return
+        setWorkspaceDiskPath(ws.path || '')
+        const listed = await listWorkspaceFiles()
+        if (cancelled || !listed?.ok || !Array.isArray(listed.paths) || !listed.paths.length) return
+        setWorkspaceRelPaths(listed.paths)
+        try {
+          sessionStorage.setItem('jarvis-workspace-paths', JSON.stringify(listed.paths))
+        } catch {
+          /* ignore */
+        }
+        if (ws.label && !workspaceLocalLabel.trim()) {
+          setWorkspaceLocalLabel(ws.label)
+        }
+        if (!workspaceSnapshot.trim()) {
+          const snap = await fetchWorkspaceSnapshot()
+          if (cancelled) return
+          if (snap?.ok) {
+            persistLocalProject(snap.label || ws.label || 'project', snap.snapshot || '', listed.paths)
+            setWorkspaceDiskPath(snap.path || ws.path || '')
+          }
+        }
+      } catch {
+        /* ignore */
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [codingModeEnabled, workspaceRelPaths.length, workspaceLocalLabel, workspaceSnapshot])
+
   const pickLocalProjectFolder = async () => {
     if (!codingModeEnabled) return
     const nativePath = await pickWorkspaceFolderNative()
@@ -2194,8 +2264,17 @@ function App() {
           return
         }
         const snap = await fetchWorkspaceSnapshot()
-        if (snap?.ok && snap.snapshot) {
-          persistLocalProject(snap.label || linked.label || 'project', snap.snapshot, snap.rel_paths || [])
+        let paths = Array.isArray(snap?.rel_paths) ? snap.rel_paths : []
+        if (!paths.length) {
+          try {
+            const listed = await listWorkspaceFiles()
+            if (listed?.ok && Array.isArray(listed.paths)) paths = listed.paths
+          } catch {
+            /* ignore */
+          }
+        }
+        if (snap?.ok && (snap.snapshot || paths.length)) {
+          persistLocalProject(snap.label || linked.label || 'project', snap.snapshot || '', paths)
           setWorkspaceDiskPath(snap.path || nativePath)
         }
       } catch (e) {
@@ -2216,8 +2295,17 @@ function App() {
           return
         }
         const snap = await fetchWorkspaceSnapshot()
-        if (snap?.ok && snap.snapshot) {
-          persistLocalProject(snap.label || linked.label || 'project', snap.snapshot, snap.rel_paths || [])
+        let paths = Array.isArray(snap?.rel_paths) ? snap.rel_paths : []
+        if (!paths.length) {
+          try {
+            const listed = await listWorkspaceFiles()
+            if (listed?.ok && Array.isArray(listed.paths)) paths = listed.paths
+          } catch {
+            /* ignore */
+          }
+        }
+        if (snap?.ok && (snap.snapshot || paths.length)) {
+          persistLocalProject(snap.label || linked.label || 'project', snap.snapshot || '', paths)
           setWorkspaceDiskPath(snap.path || typed.trim())
         }
       } catch (e) {
@@ -3946,10 +4034,13 @@ function App() {
                         rootLabel={workspaceLocalLabel}
                         relPaths={workspaceRelPaths}
                         onFileOpen={openProjectFile}
+                        activePath={filePreview?.relPath || ''}
                       />
                     ) : (
                       <p className="repo-context-tree-empty">
-                        File list not loaded. Re-open the folder to show the explorer.
+                        {projectImportBusy
+                          ? 'Reading folder…'
+                          : 'File list not loaded. Re-open the folder to show the explorer.'}
                       </p>
                     )}
                   </div>

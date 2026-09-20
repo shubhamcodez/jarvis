@@ -149,5 +149,31 @@ class OauthStoreEncryptTests(unittest.TestCase):
                 self.assertEqual(loaded["users"]["sub1"]["tokens"]["access_token"], "tok")
 
 
+class WorkspaceTreeListTests(unittest.TestCase):
+    def test_list_tree_paths_includes_hidden_and_dirs(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / ".agents").mkdir()
+            (root / ".agents" / "skill.md").write_text("ok", encoding="utf-8")
+            (root / ".env").write_text("SECRET=1", encoding="utf-8")
+            (root / "readme.md").write_text("hi", encoding="utf-8")
+            (root / "node_modules").mkdir()
+            (root / "node_modules" / "pkg.js").write_text("x", encoding="utf-8")
+            (root / "empty").mkdir()
+            with patch("tools.workspace_io.get_workspace_root", return_value=str(root)):
+                from tools.workspace_io import list_rel_paths, list_tree_paths
+
+                hidden = list_rel_paths()
+                self.assertIn("readme.md", hidden)
+                self.assertNotIn(".env", hidden)
+                tree = list_tree_paths()
+                self.assertIn(".env", tree)
+                self.assertIn(".agents/", tree)
+                self.assertIn(".agents/skill.md", tree)
+                self.assertIn("empty/", tree)
+                self.assertIn("readme.md", tree)
+                self.assertFalse(any(p.startswith("node_modules") for p in tree))
+
+
 if __name__ == "__main__":
     unittest.main()

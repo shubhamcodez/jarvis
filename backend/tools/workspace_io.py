@@ -139,6 +139,34 @@ def list_rel_paths(max_files: int = 4000) -> list[str]:
     return out
 
 
+def list_tree_paths(max_files: int = 8000, *, include_hidden: bool = True) -> list[str]:
+    """Explorer listing: files plus directory paths (dirs end with '/'). Includes dotfiles."""
+    root = _root()
+    out: list[str] = []
+    files = 0
+    for dirpath, dirnames, filenames in os.walk(root, topdown=True):
+        kept = []
+        for d in sorted(dirnames):
+            if d in _SKIP_DIR_NAMES:
+                continue
+            if not include_hidden and d.startswith("."):
+                continue
+            kept.append(d)
+        dirnames[:] = kept
+        rel_dir = Path(dirpath).relative_to(root)
+        if rel_dir.parts:
+            out.append(rel_dir.as_posix().replace("\\", "/") + "/")
+        for fn in sorted(filenames):
+            if not include_hidden and fn.startswith("."):
+                continue
+            rp = (rel_dir / fn).as_posix() if rel_dir.parts else fn
+            out.append(rp.replace("\\", "/"))
+            files += 1
+            if files >= max_files:
+                return out
+    return out
+
+
 def read_file(rel_path: str, max_bytes: int = 400_000) -> dict[str, Any]:
     target = resolve_under_root(rel_path)
     if not target.is_file():

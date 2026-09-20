@@ -2128,10 +2128,10 @@ async def api_workspace_write(body: WorkspaceWriteRequest):
 
 @app.get("/workspace/list")
 async def api_workspace_list():
-    from tools.workspace_io import list_rel_paths
+    from tools.workspace_io import list_tree_paths
 
     try:
-        return {"ok": True, "paths": list_rel_paths()}
+        return {"ok": True, "paths": list_tree_paths()}
     except Exception as e:
         return {"ok": False, "error": str(e), "paths": []}
 
