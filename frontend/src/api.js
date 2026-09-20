@@ -508,6 +508,22 @@ export async function writeWorkspaceFile(relPath, content) {
   })
 }
 
+/**
+ * Run one file under the linked workspace (VS Code–style Run).
+ * Uses the file's interpreter; does not require the host shell to be enabled.
+ * @param {string} relPath
+ * @param {number} [timeoutSec]
+ */
+export async function runWorkspaceFile(relPath, timeoutSec = 120) {
+  return request('/workspace/run', {
+    method: 'POST',
+    body: JSON.stringify({
+      rel_path: relPath || '',
+      timeout_sec: timeoutSec,
+    }),
+  })
+}
+
 export async function listPendingApprovals(chatId = null) {
   const q = chatId ? `?chat_id=${encodeURIComponent(chatId)}` : ''
   return request(`/agent/pending${q}`)

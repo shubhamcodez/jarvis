@@ -29,23 +29,41 @@ def check_loop_corruption(
     return False, ""
 
 
+def action_fingerprint(action: dict[str, Any] | None) -> str:
+    """Identify a repeated target (clicking different squares is not a loop)."""
+    if not action:
+        return ""
+    act = str(action.get("action") or "").strip().lower()
+    x, y = action.get("x"), action.get("y")
+    if x is not None and y is not None:
+        try:
+            return f"{act}:{int(float(x)) // 16}:{int(float(y)) // 16}"
+        except (TypeError, ValueError):
+            return act
+    extra = action.get("text") or action.get("key") or action.get("description") or ""
+    return f"{act}:{str(extra)[:40]}"
+
+
 def should_stop_streak(
     current_action: str,
     current_thought: str,
     history: list[dict[str, Any]],
     streak_limit: int = 3,
 ) -> bool:
-    """True if the last streak_limit steps had same action (and similar thought)."""
+    """True if the last streak_limit steps hit the same target (not merely the same verb)."""
     if len(history) < streak_limit:
         return False
     tail = history[-streak_limit:]
-    actions = [t.get("action") for t in tail]
-    if not all(a == current_action for a in actions):
+    fps = [t.get("fingerprint") or t.get("action") for t in tail]
+    if len(set(fps)) != 1 or not fps[0]:
+        return False
+    current_fp = fps[-1]
+    if current_action and current_fp.split(":")[0] != current_action:
         return False
     thoughts = [t.get("thought", "") for t in tail]
     if current_thought and thoughts.count(current_thought) >= streak_limit:
         return True
-    return True  # same action N times → stop
+    return True
 
 
 def action_signature(tool: str, args: Any = None) -> str:

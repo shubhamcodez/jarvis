@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
+import { useState, useEffect, useRef, useCallback, useMemo, forwardRef, useImperativeHandle } from 'react'
 import CodeMirror from '@uiw/react-codemirror'
 import { Prec } from '@codemirror/state'
 import { keymap } from '@codemirror/view'
@@ -26,6 +26,7 @@ import {
   agentStepsWsUrl,
   initApiAuth,
   runHostShellCommand,
+  runWorkspaceFile,
   getUserProfile,
   saveUserProfile,
   getRuntimeSettings,
@@ -400,15 +401,46 @@ function CopyResponseButton({ text }) {
   )
 }
 
+const RUNNABLE_RUNTIME = {
+  '.py': 'Python',
+  '.pyw': 'Python',
+  '.js': 'Node',
+  '.mjs': 'Node',
+  '.cjs': 'Node',
+  '.ts': 'TypeScript',
+  '.mts': 'TypeScript',
+  '.cts': 'TypeScript',
+  '.ps1': 'PowerShell',
+  '.sh': 'Bash',
+  '.bash': 'Bash',
+  '.rb': 'Ruby',
+  '.go': 'Go',
+  '.php': 'PHP',
+  '.pl': 'Perl',
+  '.lua': 'Lua',
+  '.r': 'R',
+  '.bat': 'Batch',
+  '.cmd': 'Batch',
+}
+
+function runnableRuntimeForPath(relPath) {
+  const name = String(relPath || '').replace(/\\/g, '/').split('/').pop() || ''
+  const dot = name.lastIndexOf('.')
+  if (dot < 0) return null
+  return RUNNABLE_RUNTIME[name.slice(dot).toLowerCase()] || null
+}
+
 /** VS Code–style file tab above chat when opening from explorer (editable; Save writes disk or cache). */
-function ChatFilePreview({ preview, onClose, onSave, colorScheme }) {
+function ChatFilePreview({ preview, onClose, onSave, onRun, colorScheme }) {
   const [draft, setDraft] = useState('')
   const [saving, setSaving] = useState(false)
+  const [running, setRunning] = useState(false)
   const [saveError, setSaveError] = useState(null)
   const [saveFlash, setSaveFlash] = useState(null)
   const editorViewRef = useRef(null)
   const scrollCleanupRef = useRef(null)
   const saveHotkeyRef = useRef(() => {})
+  const runHotkeyRef = useRef(() => {})
   const lineGutterRef = useRef(null)
 
   const lineCount = useMemo(() => Math.max(1, draft.split('\n').length), [draft])
@@ -427,6 +459,7 @@ function ChatFilePreview({ preview, onClose, onSave, colorScheme }) {
   useEffect(() => {
     setSaveError(null)
     setSaveFlash(null)
+    setRunning(false)
     if (!preview) {
       setDraft('')
       return
@@ -454,7 +487,7 @@ function ChatFilePreview({ preview, onClose, onSave, colorScheme }) {
   const showEditor = !!preview && !loading && !error && !isImage
 
   const handleSave = useCallback(async () => {
-    if (!onSave || !preview?.relPath || saving || !dirty) return
+    if (!onSave || !preview?.relPath || saving || !dirty) return { ok: true, skipped: true }
     setSaving(true)
     setSaveError(null)
     setSaveFlash(null)
@@ -462,24 +495,83 @@ function ChatFilePreview({ preview, onClose, onSave, colorScheme }) {
       const r = await onSave(preview.relPath, draft)
       if (!r?.ok) {
         setSaveError(r?.error || 'Save failed.')
-        return
+        return r || { ok: false, error: 'Save failed.' }
       }
       setSaveFlash(
         r.cacheOnly ? 'Saved to browser cache (re-link folder to write disk).' : 'Saved to disk.',
       )
       window.setTimeout(() => setSaveFlash(null), 4000)
+      return r
     } catch (e) {
-      setSaveError(e?.message || 'Save failed.')
+      const msg = e?.message || 'Save failed.'
+      setSaveError(msg)
+      return { ok: false, error: msg }
     } finally {
       setSaving(false)
     }
   }, [onSave, preview?.relPath, saving, dirty, draft])
+
+  const runtimeLabel = runnableRuntimeForPath(preview?.relPath)
+  const canRun = !!onRun && !!preview?.relPath && !!runtimeLabel && showEditor
+
+  const handleRun = useCallback(async () => {
+    if (!onRun || !preview?.relPath || running || saving) return
+    if (!runnableRuntimeForPath(preview.relPath)) {
+      setSaveError('No Run command for this file type.')
+      return
+    }
+    if (dirty) {
+      if (!onSave) {
+        setSaveError('Save the file first, then Run.')
+        return
+      }
+      const saved = await handleSave()
+      if (!saved?.ok) return
+      if (saved.cacheOnly) {
+        setSaveError('This file is only in the browser cache. Link the folder so Run can execute it on disk.')
+        return
+      }
+    }
+    setRunning(true)
+    setSaveError(null)
+    setSaveFlash(null)
+    try {
+      const r = await onRun(preview.relPath)
+      if (!r?.ok) {
+        setSaveError(r?.error || 'Run failed.')
+        return
+      }
+      setSaveFlash(`Finished (exit ${r.returncode ?? 0}).`)
+      window.setTimeout(() => setSaveFlash(null), 4000)
+    } catch (e) {
+      setSaveError(e?.message || 'Run failed.')
+    } finally {
+      setRunning(false)
+    }
+  }, [onRun, preview?.relPath, running, saving, dirty, onSave, handleSave])
 
   useEffect(() => {
     saveHotkeyRef.current = () => {
       void handleSave()
     }
   }, [handleSave])
+
+  useEffect(() => {
+    runHotkeyRef.current = () => {
+      void handleRun()
+    }
+  }, [handleRun])
+
+  useEffect(() => {
+    if (!canRun) return undefined
+    const onKey = (e) => {
+      if (e.key !== 'F5') return
+      e.preventDefault()
+      runHotkeyRef.current()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [canRun])
 
   const scheme = colorScheme === 'light' ? 'light' : 'dark'
   const cmExtensions = useMemo(
@@ -492,6 +584,20 @@ function ChatFilePreview({ preview, onClose, onSave, colorScheme }) {
             key: 'Mod-s',
             run: () => {
               saveHotkeyRef.current()
+              return true
+            },
+          },
+          {
+            key: 'F5',
+            run: () => {
+              runHotkeyRef.current()
+              return true
+            },
+          },
+          {
+            key: 'Mod-F5',
+            run: () => {
+              runHotkeyRef.current()
               return true
             },
           },
@@ -530,21 +636,35 @@ function ChatFilePreview({ preview, onClose, onSave, colorScheme }) {
         <span className="chat-file-preview__path" title={title}>
           {title}
         </span>
-        {showEditor && onSave ? (
+        {showEditor && (onSave || canRun) ? (
           <div className="chat-file-preview__actions">
             {saveError ? <span className="chat-file-preview__save-msg chat-file-preview__save-msg--err">{saveError}</span> : null}
             {saveFlash && !saveError ? (
               <span className="chat-file-preview__save-msg chat-file-preview__save-msg--ok">{saveFlash}</span>
             ) : null}
-            <button
-              type="button"
-              className="chat-file-preview__save"
-              onClick={() => handleSave()}
-              disabled={!dirty || saving}
-              title="Save (Ctrl+S)"
-            >
-              {saving ? 'Saving…' : 'Save'}
-            </button>
+            {onSave ? (
+              <button
+                type="button"
+                className="chat-file-preview__save"
+                onClick={() => handleSave()}
+                disabled={!dirty || saving || running}
+                title="Save (Ctrl+S)"
+              >
+                {saving ? 'Saving…' : 'Save'}
+              </button>
+            ) : null}
+            {canRun ? (
+              <button
+                type="button"
+                className="chat-file-preview__run"
+                onClick={() => handleRun()}
+                disabled={saving || running}
+                title={`Run ${runtimeLabel} File (F5)`}
+              >
+                <span aria-hidden>▶</span>
+                {running ? 'Running…' : 'Run'}
+              </button>
+            ) : null}
           </div>
         ) : null}
         <button type="button" className="chat-file-preview__close" onClick={onClose} aria-label="Close file">
@@ -635,7 +755,7 @@ function readStoredColorScheme() {
 const TERMINAL_EXPANDED_KEY = 'jarvis-terminal-expanded'
 
 /** VS Code–style host shell strip: one-line collapsed bar; expand for output + single-line input (uses POST /tools/shell). */
-function ChatTerminalPanel() {
+const ChatTerminalPanel = forwardRef(function ChatTerminalPanel(_props, ref) {
   const [expanded, setExpanded] = useState(() => {
     try {
       return (localStorage.getItem(TERMINAL_EXPANDED_KEY) ?? localStorage.getItem('ada-terminal-expanded')) === '1'
@@ -664,6 +784,50 @@ function ChatTerminalPanel() {
     const el = outRef.current
     if (el) el.scrollTop = el.scrollHeight
   }, [lines, expanded])
+
+  const appendResult = useCallback((result) => {
+    if (result?.runtime) setShellLabel(result.runtime)
+    else if (result?.shell) setShellLabel(result.shell)
+    if (!result?.ok) {
+      const parts = [result?.error, result?.stderr].filter(Boolean)
+      const msg = parts.join('\n') || `Exited with code ${result?.returncode ?? -1}.`
+      setLines((L) => [...L, { kind: 'err', text: msg }].slice(-400))
+      return
+    }
+    let out = ''
+    if (result?.stdout) out += result.stdout
+    if (result?.stderr) out += (out ? '\n' : '') + result.stderr
+    setLines((L) => [...L, { kind: 'out', text: out || `(exit ${result?.returncode ?? 0})` }].slice(-400))
+  }, [])
+
+  useImperativeHandle(
+    ref,
+    () => ({
+      prepareRun(command) {
+        setExpandedPersist(true)
+        setBusy(true)
+        const label = command || 'Run'
+        setLines((L) => [...L, { kind: 'in', text: label }].slice(-400))
+      },
+      finishRun(result) {
+        setBusy(false)
+        if (result?.display) {
+          setLines((L) => {
+            const next = L.slice()
+            for (let i = next.length - 1; i >= 0; i -= 1) {
+              if (next[i].kind === 'in') {
+                next[i] = { ...next[i], text: result.display }
+                break
+              }
+            }
+            return next.slice(-400)
+          })
+        }
+        appendResult(result || { ok: false, error: 'Run failed.' })
+      },
+    }),
+    [appendResult, setExpandedPersist],
+  )
 
   const run = useCallback(async () => {
     const c = cmd.trim()
@@ -713,7 +877,7 @@ function ChatTerminalPanel() {
           </span>
           <span className="chat-terminal__label">TERMINAL</span>
           <span className="chat-terminal__hint">
-            {shellSummary} on host — expand to run
+            {busy ? 'Running…' : `${shellSummary} — Run (F5) or expand`}
           </span>
         </button>
       </div>
@@ -741,8 +905,8 @@ function ChatTerminalPanel() {
       <div className="chat-terminal__out-wrap" ref={outRef}>
         {lines.length === 0 ? (
           <div className="chat-terminal__placeholder">
-            Runs one command per line on the API host (same cwd as the shell agent). Shell is on by default; admins can
-            disable with <code>ADA_ENABLE_SHELL=0</code> or <code>ADA_DISABLE_SHELL=1</code>.
+            Run the open file with ▶ Run or F5. Or type one host command per line. File Run uses the linked project
+            folder and does not require the host shell.
           </div>
         ) : (
           lines.map((row, i) => (
@@ -777,7 +941,7 @@ function ChatTerminalPanel() {
       </div>
     </div>
   )
-}
+})
 
 function App() {
   const [colorScheme, setColorScheme] = useState(readStoredColorScheme)
@@ -787,6 +951,7 @@ function App() {
   const [chatMeta, setChatMeta] = useState(null)
   const currentChatIdRef = useRef(null)
   const loopPollRef = useRef(null)
+  const terminalRef = useRef(null)
   const [messages, setMessages] = useState([])
   const [input, setInput] = useState('')
   const [attachments, setAttachments] = useState([])
@@ -1846,6 +2011,20 @@ function App() {
     },
     [workspaceLocalLabel, resolveWorkspaceFileBase],
   )
+
+  const runOpenWorkspaceFile = useCallback(async (relPath) => {
+    const path = String(relPath || '').replace(/\\/g, '/')
+    terminalRef.current?.prepareRun?.(path ? `Run ${path}` : 'Run')
+    try {
+      const r = await runWorkspaceFile(path, 120)
+      terminalRef.current?.finishRun?.(r)
+      return r
+    } catch (e) {
+      const r = { ok: false, error: e?.message || String(e) }
+      terminalRef.current?.finishRun?.(r)
+      return r
+    }
+  }, [])
 
   const restoreCheckpointById = useCallback(async (checkpointId) => {
     const r = await restoreCheckpoint(checkpointId)
@@ -4197,6 +4376,7 @@ function App() {
                   preview={filePreview}
                   onClose={() => setFilePreview(null)}
                   onSave={saveProjectFile}
+                  onRun={runOpenWorkspaceFile}
                   colorScheme={colorScheme}
                 />
               ) : (
@@ -4250,7 +4430,7 @@ function App() {
                 />
               ) : null}
               <div className="chat-container chat-container--rail">{chatMainInner}</div>
-              <ChatTerminalPanel />
+              <ChatTerminalPanel ref={terminalRef} />
               <footer className="app-context-footer app-context-footer--chat-rail" role="status">
                 <div className="app-context-footer__cluster">
                   {workspaceSnapshot.trim() ? (
@@ -4296,10 +4476,11 @@ function App() {
             preview={filePreview}
             onClose={() => setFilePreview(null)}
             onSave={codingModeEnabled ? saveProjectFile : null}
+            onRun={runOpenWorkspaceFile}
             colorScheme={colorScheme}
           />
           {chatMainInner}
-          <ChatTerminalPanel />
+          <ChatTerminalPanel ref={terminalRef} />
         </div>
         ) : null}
         {panel === 'activity' ? (
@@ -4579,7 +4760,7 @@ function App() {
               <div className="settings-section">
                 <label className="settings-label">Autonomy</label>
                 <p className="settings-description">
-                  How much Jarvis may execute without asking. High-impact writes (email, delete, shell, GUI) stay gated by default.
+                  How much Jarvis may execute without asking when the composer is on Agent. Switch Plan / Draft / Agent next to the chat box. High-impact writes (email, delete, shell, GUI) stay gated by default.
                 </p>
                 <select
                   className="settings-model-select"
@@ -4600,29 +4781,6 @@ function App() {
                   <option value="low_risk_auto">Low-risk auto (reads)</option>
                   <option value="gated">Gated writes (recommended)</option>
                   <option value="limited_auto">Limited auto</option>
-                </select>
-              </div>
-              <div className="settings-section">
-                <label className="settings-label">Run mode</label>
-                <p className="settings-description">
-                  Plan blocks shell, file writes, email send, and GUI. Draft always asks before those. Agent uses the autonomy level above.
-                </p>
-                <select
-                  className="settings-model-select"
-                  value={runMode}
-                  onChange={async (e) => {
-                    const v = e.target.value
-                    try {
-                      await setRunMode(v)
-                      setRunModeState(v)
-                    } catch (err) {
-                      alert(err?.message || 'Could not save run mode.')
-                    }
-                  }}
-                >
-                  <option value="plan">Plan only</option>
-                  <option value="draft">Draft + approve</option>
-                  <option value="agent">Agent</option>
                 </select>
               </div>
               <div className="settings-section">

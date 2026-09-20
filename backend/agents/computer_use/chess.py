@@ -38,3 +38,22 @@ def analyze_position(action: dict[str, Any]) -> str:
         pass
     who = "White" if stm == "w" else "Black"
     return f"{format_grid(place)}\n\n{who} to move. Suggested: {label}"
+
+
+def suggested_uci(action: dict[str, Any]) -> str | None:
+    """Engine UCI for a VLM-read position, or None."""
+    if not HAS_CHESS:
+        return None
+    place = normalize_placement(str(action.get("fen") or action.get("fen_placement") or ""))
+    if not place:
+        place = grid_to_placement(action.get("ranks"))
+    if not place:
+        return None
+    side = str(action.get("side_to_move") or action.get("side") or "w")
+    board = board_from_placement(place, side)
+    if board is None or board.is_game_over():
+        return None
+    try:
+        return best_move(board.fen(), movetime_ms=400, depth=3)
+    except Exception:
+        return None

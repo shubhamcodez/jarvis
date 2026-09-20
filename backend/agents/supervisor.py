@@ -58,6 +58,8 @@ Rules:
 - **mkdir / git / npm / terminal** → **shell** (not desktop), only if appropriate.
 - **Ticker quote + plot** → often **finance** then **coding** in two entries.
 - **Calendar / schedule / Gmail / inbox / send email** → **google** (not desktop).
+- **Click / play a site or game / chess.com / control the screen** → **desktop**. Never send that to chat.
+- Short follow-ups after a Desktop task ("try again", "keep going", "you were just doing that") → **desktop** with the same goal.
 - Be decisive. Output only valid JSON."""
 
 
@@ -402,6 +404,86 @@ def _heuristic_finance_task(message: str) -> Optional[dict]:
     return None
 
 
+_DESKTOP_GOAL_RE = re.compile(r"Desktop task \(goal:\s*(.+?)\)\s*\.", re.S)
+_CONTINUE_DESKTOP = (
+    "try again",
+    "keep going",
+    "keep playing",
+    "continue",
+    "you were just",
+    "you just did",
+    "you just were",
+    "do it again",
+    "don't stop",
+    "dont stop",
+    "resume",
+    "same thing",
+    "do that again",
+)
+_DESKTOP_HINTS = (
+    "chess.com",
+    "lichess",
+    "play chess",
+    "win the game",
+    "play online",
+    "start playing",
+    "click on",
+    "click the",
+    "on my screen",
+    "on the screen",
+    "desktop task",
+    "use the mouse",
+    "move the pieces",
+)
+
+
+def extract_desktop_goal(text: str) -> Optional[str]:
+    m = _DESKTOP_GOAL_RE.search(text or "")
+    if not m:
+        return None
+    return (m.group(1) or "").strip()[:800] or None
+
+
+def _last_desktop_goal(recent_turns: Optional[list]) -> Optional[str]:
+    for turn in reversed(recent_turns or []):
+        if not isinstance(turn, dict):
+            continue
+        if (turn.get("role") or "") != "assistant":
+            continue
+        goal = extract_desktop_goal(str(turn.get("content") or ""))
+        if goal:
+            return goal
+    return None
+
+
+def _heuristic_desktop_task(message: str, recent_turns: Optional[list] = None) -> Optional[dict]:
+    m = (message or "").strip()
+    if not m:
+        return None
+    low = m.lower()
+    if any(h in low for h in _DESKTOP_HINTS):
+        return _decision_with_agents(
+            [{"agent": "desktop", "goal": m}],
+            "Heuristic: on-screen click / live game — desktop GUI, not chat.",
+            "1. Look at the screen 2. Click the live UI 3. Continue until the goal is done",
+        )
+    if any(h in low for h in _CONTINUE_DESKTOP):
+        prior = _last_desktop_goal(recent_turns)
+        if prior:
+            return _decision_with_agents(
+                [{"agent": "desktop", "goal": prior}],
+                "Heuristic: continue the previous desktop task.",
+                "1. Resume GUI control 2. Finish the same goal",
+            )
+        if "desktop" in " ".join(str((t or {}).get("content") or "") for t in (recent_turns or [])).lower():
+            return _decision_with_agents(
+                [{"agent": "desktop", "goal": m}],
+                "Heuristic: user asked to continue desktop work.",
+                "1. Resume GUI control 2. Finish the goal",
+            )
+    return None
+
+
 def _heuristic_google_task(message: str) -> Optional[dict]:
     m = (message or "").strip()
     if not m:
@@ -468,6 +550,7 @@ def supervisor_decision(
     user_message: str,
     *,
     llm_user_content: Optional[str] = None,
+    recent_turns: Optional[list] = None,
 ) -> dict:
     """
     Returns dict with:
@@ -482,6 +565,21 @@ def supervisor_decision(
         return _decision_with_agents([], "", "")
 
     llm_body = (llm_user_content or user_message).strip()
+    if recent_turns:
+        bits = []
+        for t in recent_turns[-6:]:
+            if not isinstance(t, dict):
+                continue
+            role = (t.get("role") or "?")[:10]
+            content = str(t.get("content") or "").replace("\n", " ")[:280]
+            if content:
+                bits.append(f"{role}: {content}")
+        if bits:
+            llm_body = "Recent turns:\n" + "\n".join(bits) + "\n\nCurrent user message:\n" + llm_body
+
+    hinted_desk = _heuristic_desktop_task(user_message, recent_turns)
+    if hinted_desk:
+        return hinted_desk
 
     hinted = _heuristic_coding_task(user_message)
     if hinted:
@@ -556,6 +654,7 @@ def compute_supervisor_decision(
     *,
     coding_mode: bool = False,
     coding_project_context: str = "",
+    recent_turns: Optional[list] = None,
 ) -> dict:
     """
     Entry point for the router: optionally forces the coding agent (UI coding mode),
@@ -564,6 +663,9 @@ def compute_supervisor_decision(
     """
     um = (user_message or "").strip()
     ctx = (coding_project_context or "").strip()
+    desk = _heuristic_desktop_task(um, recent_turns)
+    if desk:
+        return desk
     if coding_mode and um:
         reasoning = "Coding mode: user routed to the coding agent (sandbox + optional workspace file updates)."
         next_s = (
@@ -578,4 +680,4 @@ def compute_supervisor_decision(
             reasoning,
             next_s,
         )
-    return supervisor_decision(api_key, provider, um)
+    return supervisor_decision(api_key, provider, um, recent_turns=recent_turns)

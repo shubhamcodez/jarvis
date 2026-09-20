@@ -54,6 +54,7 @@ Above the composer: **Plan** (no writes), **Draft** (approve every write), **Age
 - **Hold / Resume** on the queue — Keep follow-ups visible without auto-sending (review first).
 - **Stop** — Abort the current stream. The queue stays unless you remove items.
 - **Shift+Enter** — New line in the composer.
+- **Run / F5** on an open file — Execute it in the linked project folder (Python, Node, PowerShell, and similar). Output appears in TERMINAL. Unsaved edits are written first.
 - **Pin** on a reply — Save it in Activity.
 - Search chats from the Chats menu.
 

@@ -35,9 +35,9 @@ const ICON_CHEVRON = (
 )
 
 const MODES = [
-  { id: 'agent', label: 'Agent', icon: ICON_AGENT },
-  { id: 'plan', label: 'Plan', icon: ICON_PLAN },
-  { id: 'draft', label: 'Draft', icon: ICON_DRAFT },
+  { id: 'agent', label: 'Agent', hint: 'Uses Settings → Autonomy', icon: ICON_AGENT },
+  { id: 'plan', label: 'Plan', hint: 'Blocks shell, file writes, email, and GUI', icon: ICON_PLAN },
+  { id: 'draft', label: 'Draft', hint: 'Asks before those actions', icon: ICON_DRAFT },
 ]
 
 export function ModeMenu({ runMode, onRunMode }) {
@@ -61,7 +61,8 @@ export function ModeMenu({ runMode, onRunMode }) {
         className="mode-menu__trigger"
         aria-haspopup="listbox"
         aria-expanded={open}
-        aria-label={`Run mode: ${current.label}`}
+        aria-label={`Run mode: ${current.label}. ${current.hint}`}
+        title={`${current.label}: ${current.hint}`}
         onClick={() => setOpen((v) => !v)}
       >
         {current.icon}
@@ -85,7 +86,10 @@ export function ModeMenu({ runMode, onRunMode }) {
                 }}
               >
                 {m.icon}
-                <span>{m.label}</span>
+                <span className="mode-menu__item-text">
+                  <span className="mode-menu__item-label">{m.label}</span>
+                  <span className="mode-menu__hint">{m.hint}</span>
+                </span>
                 {on ? ICON_CHECK : null}
               </button>
             )

@@ -232,5 +232,48 @@ class WorkspaceTreeListTests(unittest.TestCase):
                 self.assertNotEqual(first, second)
 
 
+class WorkspaceRunTests(unittest.TestCase):
+    def test_command_for_python(self):
+        from tools.workspace_run import command_for_path
+
+        spec = command_for_path(Path("hello.py"))
+        self.assertEqual(spec["runtime"], "Python")
+        self.assertEqual(Path(spec["argv"][-1]).name, "hello.py")
+
+    def test_refuses_blocked_exe(self):
+        from tools.workspace_run import command_for_path
+
+        with self.assertRaises(ValueError):
+            command_for_path(Path("evil.exe"))
+
+    def test_refuses_unsupported_ext(self):
+        from tools.workspace_run import command_for_path
+
+        with self.assertRaises(ValueError):
+            command_for_path(Path("notes.md"))
+
+    def test_runs_python_file(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "hi.py").write_text("print('hello-jarvis')\n", encoding="utf-8")
+            with patch("tools.workspace_io.get_workspace_root", return_value=str(root)):
+                from tools.workspace_run import run_workspace_file
+
+                r = run_workspace_file("hi.py", timeout_sec=15)
+                self.assertTrue(r["ok"], r)
+                self.assertIn("hello-jarvis", r.get("stdout") or "")
+                self.assertEqual(r.get("runtime"), "Python")
+
+    def test_path_escape_rejected(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            with patch("tools.workspace_io.get_workspace_root", return_value=str(root)):
+                from tools.workspace_run import run_workspace_file
+
+                r = run_workspace_file("../hi.py")
+                self.assertFalse(r["ok"])
+                self.assertIn("path", (r.get("error") or "").lower())
+
+
 if __name__ == "__main__":
     unittest.main()

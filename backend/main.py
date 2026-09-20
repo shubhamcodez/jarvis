@@ -574,6 +574,13 @@ class WorkspaceWriteRequest(BaseModel):
     content: str = ""
 
 
+class WorkspaceRunRequest(BaseModel):
+    """Run one file under the linked workspace (VS Code–style Run; does not require host shell)."""
+
+    rel_path: str
+    timeout_sec: float | None = None
+
+
 class AgentApproveRequest(BaseModel):
     approval_id: str
     approve: bool = True
@@ -2152,6 +2159,24 @@ async def api_workspace_tree_stamp():
         return tree_stamp()
     except Exception as e:
         return {"ok": False, "error": str(e), "stamp": "", "count": 0}
+
+
+@app.post("/workspace/run")
+async def api_workspace_run(body: WorkspaceRunRequest):
+    from tools.workspace_run import run_workspace_file
+
+    try:
+        return await asyncio.to_thread(run_workspace_file, body.rel_path, body.timeout_sec)
+    except Exception as e:
+        return {
+            "ok": False,
+            "returncode": -1,
+            "stdout": "",
+            "stderr": "",
+            "error": str(e),
+            "runtime": None,
+            "display": "",
+        }
 
 
 @app.get("/agent/pending")

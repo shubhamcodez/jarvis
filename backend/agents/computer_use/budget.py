@@ -31,3 +31,28 @@ def steps_for_budget(duration_sec: Optional[float], base: int = 25) -> int:
     if not duration_sec:
         return base
     return max(base, min(400, int(float(duration_sec) / 2.5) + 40))
+
+
+_PLAY_UNTIL_DONE = (
+    "win the game",
+    "entire game",
+    "whole game",
+    "play through",
+    "until you win",
+    "keep playing",
+    "start playing",
+    "play the game",
+    "play until",
+)
+
+
+def implied_duration(text: str) -> Optional[float]:
+    """Default time budget when the user wants a long-running on-screen game, not a one-click."""
+    if parse_duration(text):
+        return parse_duration(text)
+    low = (text or "").lower()
+    if any(p in low for p in _PLAY_UNTIL_DONE):
+        return 15 * 60
+    if "chess" in low and any(p in low for p in ("play", "win", "game", "move")):
+        return 15 * 60
+    return None
