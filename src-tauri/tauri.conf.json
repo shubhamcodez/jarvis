@@ -33,7 +33,9 @@
       "icons/128x128.png",
       "icons/icon.ico"
     ],
-    "resources": [],
+    "resources": {
+      "binaries/jarvis-backend.exe": "jarvis-backend.exe"
+    },
     "windows": {
       "webviewInstallMode": {
         "type": "downloadBootstrapper"

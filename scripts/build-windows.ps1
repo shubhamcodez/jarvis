@@ -35,14 +35,29 @@ Write-Host "Sidecar copied to src-tauri/binaries/jarvis-backend.exe"
 
 Write-Host "==> Frontend + Tauri NSIS"
 npm install
-$env:TAURI_CONFIG = '{"bundle":{"resources":{"binaries/jarvis-backend.exe":"jarvis-backend.exe"}}}'
 npm run tauri:build
-Remove-Item Env:TAURI_CONFIG -ErrorAction SilentlyContinue
 
-$nsis = Get-ChildItem -Recurse -Path "$Root\src-tauri\target\release\bundle\nsis" -Filter "*setup.exe" -ErrorAction SilentlyContinue |
-  Sort-Object LastWriteTime -Descending | Select-Object -First 1
+$search = @(
+  (Join-Path $Root "src-tauri\target\release\bundle\nsis"),
+  (Join-Path $Root "dist")
+)
+if ($env:CARGO_TARGET_DIR) {
+  $search += (Join-Path $env:CARGO_TARGET_DIR "release\bundle\nsis")
+}
+$nsis = $search | ForEach-Object {
+  if (Test-Path $_) {
+    Get-ChildItem -Recurse -Path $_ -Filter "Jarvis_*setup.exe" -ErrorAction SilentlyContinue
+  }
+} | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+if (-not $nsis) {
+  $nsis = Get-ChildItem -Recurse -Path "$Root\src-tauri" -Filter "Jarvis_*setup.exe" -ErrorAction SilentlyContinue |
+    Sort-Object LastWriteTime -Descending | Select-Object -First 1
+}
+$distDir = Join-Path $Root "dist"
 if ($nsis) {
-  Write-Host "Installer: $($nsis.FullName)"
+  New-Item -ItemType Directory -Force -Path $distDir | Out-Null
+  Copy-Item $nsis.FullName (Join-Path $distDir $nsis.Name) -Force
+  Write-Host "Installer: $(Join-Path $distDir $nsis.Name)"
 } else {
   Write-Host "Tauri build finished. Look under src-tauri/target/release/bundle/nsis/"
 }
