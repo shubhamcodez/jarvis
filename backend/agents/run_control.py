@@ -35,7 +35,12 @@ def start_run(*, chat_id: str = "", task_id: str = "", run_id: Optional[str] = N
             if task_id:
                 existing["task_id"] = task_id
             existing["status"] = "running"
+            existing["stop_reason"] = ""
             existing["updated_at"] = time.time()
+            ev = existing.get("cancel")
+            if ev:
+                ev.clear()
+            _prune_runs_locked()
             return public_run(existing)
     rec = {
         "run_id": rid,
@@ -53,8 +58,22 @@ def start_run(*, chat_id: str = "", task_id: str = "", run_id: Optional[str] = N
         "stop_reason": "",
     }
     with _LOCK:
+        _prune_runs_locked()
         _RUNS[rid] = rec
     return public_run(rec)
+
+
+def _prune_runs_locked() -> None:
+    if len(_RUNS) < 80:
+        return
+    now = time.time()
+    stale = [
+        rid
+        for rid, rec in _RUNS.items()
+        if rec.get("status") != "running" and now - float(rec.get("updated_at") or 0) > 3600
+    ]
+    for rid in stale:
+        _RUNS.pop(rid, None)
 
 
 def public_run(rec: dict[str, Any]) -> dict[str, Any]:
@@ -277,14 +296,22 @@ def list_checkpoints(run_id: Optional[str] = None, limit: int = 30) -> list[dict
 
 def restore_checkpoint(checkpoint_id: str) -> dict[str, Any]:
     cid = (checkpoint_id or "").strip()
-    if not cid:
-        return {"ok": False, "error": "missing checkpoint id"}
+    if not cid or not cid.replace("_", "").replace("-", "").isalnum() or ".." in cid:
+        return {"ok": False, "error": "invalid checkpoint id"}
     root = Path(chats_dir()) / "checkpoints"
     path = None
     if root.is_dir():
-        for p in root.glob(f"*/{cid}.json"):
-            path = p
-            break
+        for d in root.iterdir():
+            if not d.is_dir():
+                continue
+            candidate = (d / f"{cid}.json").resolve()
+            try:
+                candidate.relative_to(root.resolve())
+            except ValueError:
+                continue
+            if candidate.is_file():
+                path = candidate
+                break
     if path is None or not path.exists():
         return {"ok": False, "error": "unknown checkpoint"}
     try:

@@ -14,9 +14,9 @@ from __future__ import annotations
 import re
 from typing import Any, Optional
 
-# ```ada-file:path/to/file\nBODY``` (optional space after opening ```)
+# Opening fence at BOL; close only on a line that is exactly ```
 _ADA_FILE_BLOCK = re.compile(
-    r"^```\s*ada-file:([^\n`]+)\s*\n(.*?)```\s*",
+    r"^```\s*ada-file:([^\n`]+)\s*\n(.*?\n)```\s*$",
     re.MULTILINE | re.DOTALL,
 )
 
@@ -26,6 +26,8 @@ def normalize_workspace_relative_path(raw: str) -> Optional[str]:
     if not p or p.startswith("..") or "/../" in f"/{p}/":
         return None
     if ".." in p.split("/"):
+        return None
+    if re.match(r"^[A-Za-z]:", p) or p.startswith("//"):
         return None
     return p
 

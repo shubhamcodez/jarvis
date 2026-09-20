@@ -1,6 +1,54 @@
-# Observability: skills → logs → evals → optimization (per model)
+# Observability: traces → hierarchical spans → metrics → evals → optimization
 
-Each **model** (OpenAI, xAI) is traced and evaluated independently.
+Each **model** (OpenAI, xAI, local) is traced independently. Memory and context
+assembly are first-class: episodic retrieval, semantic facts, and a cache-aware
+system prefix are recorded on every turn.
+
+## Memory + context (production path)
+
+- **Episodic store** persists to `data_root()/memory/vector_store.jsonl` and
+  reloads on boot. Hybrid rank: 0.62 cosine + 0.26 lexical + 0.08 recency + source boost.
+- **Write-back** (Mem0-style) runs after a successful turn: durable first-person
+  facts go to the semantic store; the chat is re-ingested into the vector store.
+- **Context assembly** (MemGPT/Letta + CAL): stable prefix (identity, policy,
+  core facts) then dynamic (working state, episodic hits, tools). History is
+  compacted to a token budget. The user turn is not stuffed with memory.
+- Token budgets live in `ada-config.yaml` under `context:`
+  (`system_stable_tokens`, `system_dynamic_tokens`, `history_tokens`,
+  `memory_tokens`, `facts_tokens`, `identity_tokens`).
+- `GET /memory/status` reports store size, fact count, and those budgets.
+
+## Hierarchical spans (local LangSmith-style)
+
+Every turn writes nested spans to `ada-observability/traces/spans.jsonl`:
+
+```
+turn
+  ├ supervisor
+  ├ retrieval
+  ├ tools
+  ├ llm
+  └ specialist
+```
+
+- `GET /observability/spans?limit=200&trace_id=`
+- Span attributes and errors are redacted (API keys, Bearer tokens, `sk-`/`xai-`).
+- Flat `trace.jsonl` rows now include `trace_id` when a span is active so you
+  can join a turn to its children.
+
+## Structured logs + metrics
+
+- JSON logs on the `ada.*` loggers (stderr + rotating `ada-observability/logs/app.jsonl`).
+- Correlated with `trace_id` when a span is open.
+- `GET /observability/logs?limit=200`
+- In-process counters/histograms (Prometheus-shaped keys) flush to
+  `ada-observability/optimization/metrics.json` every 15s.
+- `GET /observability/metrics` returns `{ live, persisted }`.
+- Turn metrics: `turns.total`, `turns.success`, `turns.error`,
+  `turn.duration_sec`, `turn.tokens_in`, `turn.tokens_out`.
+- Context/memory: `retrieval.calls`, `retrieval.hits`,
+  `context.system_tokens` / `stable_tokens` / `dynamic_tokens`,
+  `memory.writeback.facts` / `ingest` / `chunks`.
 
 ## Trace logging (automatic)
 

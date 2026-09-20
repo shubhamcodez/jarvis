@@ -82,7 +82,7 @@ def shell_runtime_label() -> str:
 def _resolve_shell_mode() -> str:
     v = _getenv("ADA_SHELL", "JARVIS_SHELL").strip().lower()
     if v in ("powershell", "pwsh", "bash", "sh"):
-        return "powershell" if v == "pwsh" else v
+        return v
     if sys.platform == "win32":
         if shutil.which("bash"):
             return "bash"
@@ -110,9 +110,14 @@ _BLOCKED_PATTERNS = [
     re.compile(r"\bmkfs\.", re.I),
     re.compile(r"\\\.\\", re.I),  # Windows device paths
     re.compile(r"\bformat\.?\s+[a-z]\s*:", re.I),
-    re.compile(r"Invoke-WebRequest.*-OutFile", re.I),  # often exfil; optional — user may want wget
+    re.compile(r"Invoke-WebRequest.*-OutFile", re.I),
+    re.compile(r"\bcurl\b.*\|\s*(iex|invoke-expression)", re.I),
+    re.compile(r"iwr\s+.+\|\s*iex", re.I),
+    re.compile(r"-enc(?:odedcommand)?\s+", re.I),
+    re.compile(r"\bstop-computer\b", re.I),
+    re.compile(r"\bshutdown\b", re.I),
+    re.compile(r"rd\s+/s", re.I),
 ]
-# Too aggressive to block IWR globally; drop that pattern.
 
 _BLOCKED_SUBSTRINGS = [
     "rm -rf / ",
@@ -173,12 +178,27 @@ def run_shell_command(command: str, timeout_sec: float | None = None) -> dict:
         _getenv("ADA_SHELL_TIMEOUT", "JARVIS_SHELL_TIMEOUT") or "120"
     )
     max_out = int(_getenv("ADA_SHELL_MAX_OUTPUT", "JARVIS_SHELL_MAX_OUTPUT") or "32000")
-    env = os.environ.copy()
+    secret_keys = (
+        "OPENAI_API_KEY",
+        "XAI_API_KEY",
+        "xAI_API_KEY",
+        "HF_TOKEN",
+        "GOOGLE_OAUTH_CLIENT_SECRET",
+        "GOOGLE_OAUTH_CLIENT_ID",
+    )
+    env = {
+        k: v
+        for k, v in os.environ.items()
+        if k not in secret_keys and not k.endswith("_API_KEY") and "TOKEN" not in k
+    }
 
     try:
-        if mode == "powershell":
+        if mode in ("powershell", "pwsh"):
+            exe = shutil.which("pwsh" if mode == "pwsh" else "powershell") or (
+                "pwsh" if mode == "pwsh" else "powershell"
+            )
             proc = subprocess.run(
-                ["powershell", "-NoProfile", "-NonInteractive", "-Command", command],
+                [exe, "-NoProfile", "-NonInteractive", "-Command", command],
                 cwd=str(cwd),
                 capture_output=True,
                 text=True,

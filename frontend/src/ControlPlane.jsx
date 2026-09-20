@@ -109,7 +109,7 @@ export function ControlPlane({
   sending,
 }) {
   const used = liveUsage?.tokens_used || 0
-  const cap = liveUsage?.max_tokens || 80000
+  const cap = liveUsage?.max_tokens ?? 80000
   const pct = cap ? Math.min(100, Math.round((used / cap) * 100)) : 0
   const openTasks = (tasks || []).filter((t) =>
     ['pending', 'active', 'blocked', 'waiting_approval', 'paused', 'error'].includes(t.status),

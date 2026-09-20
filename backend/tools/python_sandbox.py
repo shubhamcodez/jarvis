@@ -59,7 +59,17 @@ def run_sandboxed_python(code: str, timeout_sec: float = DEFAULT_TIMEOUT_SEC) ->
     if not WORKER.is_file():
         return {"ok": False, "error": "sandbox_worker.py missing"}
 
-    env = os.environ.copy()
+    env = {
+        "PATH": os.environ.get("PATH", ""),
+        "SYSTEMROOT": os.environ.get("SYSTEMROOT", ""),
+        "WINDIR": os.environ.get("WINDIR", ""),
+        "TEMP": os.environ.get("TEMP", ""),
+        "TMP": os.environ.get("TMP", ""),
+        "HOME": os.environ.get("HOME", ""),
+        "USERPROFILE": os.environ.get("USERPROFILE", ""),
+        "LANG": os.environ.get("LANG", "C"),
+    }
+    env = {k: v for k, v in env.items() if v}
     env.setdefault("PYTHONIOENCODING", "utf-8")
     env.setdefault("PYTHONUTF8", "1")
     # Headless charts (matplotlib) in the sandbox — no GUI display required.

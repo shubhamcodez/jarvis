@@ -39,8 +39,6 @@ def run_tools_for_turn(
         if py_tool:
             py_block, tool_used = py_tool
             system_blocks.append(py_block)
-            system_content = "\n\n".join(system_blocks) if system_blocks else ""
-            return system_content, tool_used
 
     # Web search: explicit query from client or natural phrasing ("search the web for …")
     wq = (web_search_query or "").strip()
@@ -61,6 +59,19 @@ def run_tools_for_turn(
         )
         if tool_used is None:
             tool_used = w_tool
+
+    low = (message or "").lower()
+    if _allowed("github_issue") and any(k in low for k in ("issue #", "issues/", "implement #", "fix #")):
+        try:
+            from tools.github_issues import fetch_issue, format_issue_for_prompt
+
+            issue = fetch_issue(message or "")
+            if issue.get("ok"):
+                system_blocks.append(format_issue_for_prompt(issue))
+                if tool_used is None:
+                    tool_used = {"name": "github_issue", "input": issue.get("url"), "result": issue.get("title")}
+        except Exception:
+            pass
 
     system_content = "\n\n".join(system_blocks) if system_blocks else ""
     return system_content, tool_used

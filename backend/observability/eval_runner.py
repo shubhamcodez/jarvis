@@ -18,7 +18,12 @@ Score for coherence and task completion. If no rubric, use coherence and relevan
 
 def _run_case_with_provider(case: EvalCase, provider: str) -> EvalRun:
     """Run one eval case with the given provider; return EvalRun."""
-    api_key = get_openai_api_key() if provider == "openai" else get_xai_api_key()
+    if provider == "openai":
+        api_key = get_openai_api_key()
+    elif provider == "local":
+        api_key = "local"
+    else:
+        api_key = get_xai_api_key()
     client = get_llm_client(provider)
     messages = list(case.messages)
     if not messages:
@@ -35,8 +40,12 @@ def _run_case_with_provider(case: EvalCase, provider: str) -> EvalRun:
         prompt = full + "\n\nContinue the conversation as the assistant."
     else:
         prompt = last_user
+    history = [m for m in messages if m is not messages[-1] or m.get("role") != "user"]
     try:
-        reply = client.chat(api_key, prompt, attachment_paths=None)
+        try:
+            reply = client.chat(api_key, prompt, attachment_paths=None, history=history or None)
+        except TypeError:
+            reply = client.chat(api_key, prompt, attachment_paths=None)
     except Exception as e:
         return EvalRun(case_id=case.id, provider=provider, reply="", error=str(e), passed=False)
     # Optional: LLM judge for score (use OpenAI for judge to save cost on eval models)
@@ -45,7 +54,7 @@ def _run_case_with_provider(case: EvalCase, provider: str) -> EvalRun:
     try:
         judge_key = get_openai_api_key()
         judge_client = get_llm_client("openai")
-        judge_prompt = f"{JUDGE_SYSTEM}\n\nMessages: {messages}\n\nModel reply: {reply[:500]}\n\nExpected/rubric: {case.expected or case.rubric or 'N/A'}\n\nReply with ONLY the JSON object."
+        judge_prompt = f"{JUDGE_SYSTEM}\n\nMessages: {messages}\n\nModel reply: {reply[:4000]}\n\nExpected/rubric: {case.expected or case.rubric or 'N/A'}\n\nReply with ONLY the JSON object."
         raw = judge_client.chat(judge_key, judge_prompt, attachment_paths=None)
         import json
         import re
@@ -84,18 +93,23 @@ def run_evals_for_all_models(
 
 
 def pass_at_k(runs: list[dict], k: int = 1) -> dict[str, float]:
-    """Given eval runs (list of dicts with provider, passed), compute pass@k per provider."""
-    by_provider = {}
+    """Pass rate per provider. When k>1, group by case_id and pass if any of the last k trials passed."""
+    k = max(1, int(k or 1))
+    by_provider: dict[str, dict[str, list[int]]] = {}
     for r in runs:
         p = r.get("provider", "")
-        if p not in by_provider:
-            by_provider[p] = []
-        if r.get("passed") is not None:
-            by_provider[p].append(1 if r.get("passed") else 0)
+        cid = r.get("case_id") or r.get("id") or ""
+        if r.get("passed") is None:
+            continue
+        by_provider.setdefault(p, {}).setdefault(cid, []).append(1 if r.get("passed") else 0)
     out = {}
-    for p, results in by_provider.items():
-        if len(results) == 0:
+    for p, cases in by_provider.items():
+        if not cases:
             out[p] = 0.0
-        else:
-            out[p] = sum(results) / len(results)
+            continue
+        scores = []
+        for trials in cases.values():
+            window = trials[-k:]
+            scores.append(1 if any(window) else 0)
+        out[p] = sum(scores) / len(scores)
     return out

@@ -99,9 +99,7 @@ def load_eval_cases(limit: int = 1000) -> list[EvalCase]:
     cases = []
     try:
         with open(path, "r", encoding="utf-8") as f:
-            for i, line in enumerate(f):
-                if limit and i >= limit:
-                    break
+            for line in f:
                 line = line.strip()
                 if not line:
                     continue
@@ -111,6 +109,8 @@ def load_eval_cases(limit: int = 1000) -> list[EvalCase]:
                     continue
     except Exception:
         pass
+    if limit and len(cases) > limit:
+        cases = cases[-limit:]
     return cases
 
 

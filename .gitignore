@@ -44,10 +44,14 @@ npm-debug.log*
 Thumbs.db
 
 # Local Hugging Face / llama.cpp weights (downloaded at runtime)
-models/
+/models/
 
 # Env and secrets
 .env
 .env.local
 *.pem
 .secrets/
+
+# Downloaded benchmark corpora + SWE run artifacts
+backend/benchmarks/data/
+ada-artifacts/

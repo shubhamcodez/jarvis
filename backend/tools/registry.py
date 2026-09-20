@@ -24,6 +24,27 @@ TOOLS: dict[str, dict[str, Any]] = {
         "risk": "read",
         "description": "Bounded repository snapshot for the coding agent",
     },
+    "grep": {
+        "risk": "read",
+        "description": "Search file contents under the workspace (ripgrep or scan)",
+    },
+    "apply_patch": {
+        "risk": "write",
+        "description": "Unique search-replace patch in a workspace file",
+        "args": {"rel_path": "string", "old": "string", "new": "string"},
+    },
+    "run_tests": {
+        "risk": "read",
+        "description": "Compile + pytest/unittest against an isolated overlay copy",
+    },
+    "swe_loop": {
+        "risk": "write",
+        "description": "Software-engineering loop: localize, patch, test, critic",
+    },
+    "github_issue": {
+        "risk": "read",
+        "description": "Fetch a GitHub issue via gh (implement #N)",
+    },
     "weather": {"risk": "read", "description": "Current weather for a place"},
     "web_search": {"risk": "read", "description": "Web search (untrusted content)"},
     "finance_quote": {"risk": "read", "description": "Market data via yfinance"},

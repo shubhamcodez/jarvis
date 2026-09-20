@@ -8,17 +8,25 @@ import uuid
 from pathlib import Path
 from typing import Any, Optional
 
-from config import chats_dir
+from config import chats_dir, data_root
 
 _LOCK = threading.Lock()
 
 _OPEN = frozenset({"pending", "active", "blocked", "waiting_approval", "paused"})
+_STATUSES = _OPEN | frozenset({"complete", "completed", "error", "cancelled", "canceled", "skipped"})
 
 
 def _path() -> Path:
-    d = Path(chats_dir())
+    d = data_root() / "memory"
     d.mkdir(parents=True, exist_ok=True)
-    return d / "tasks.json"
+    dest = d / "tasks.json"
+    legacy = Path(chats_dir()) / "tasks.json"
+    if not dest.exists() and legacy.exists():
+        try:
+            dest.write_bytes(legacy.read_bytes())
+        except OSError:
+            pass
+    return dest
 
 
 def _empty() -> dict[str, Any]:
@@ -129,7 +137,14 @@ def update_task(task_id: str, **fields: Any) -> Optional[dict[str, Any]]:
             if t.get("id") != tid:
                 continue
             for k, v in fields.items():
-                if k in allowed:
+                if k not in allowed:
+                    continue
+                if k == "status":
+                    sv = str(v or "").strip().lower()
+                    if sv not in _STATUSES:
+                        continue
+                    t[k] = sv
+                else:
                     t[k] = v
             t["updated_at"] = time.time()
             _save(data)
@@ -219,7 +234,11 @@ def sync_from_agent_state(state: dict[str, Any], *, status: Optional[str] = None
 
 def remaining_plan(task: dict[str, Any]) -> list[dict[str, Any]]:
     out = []
-    for step in task.get("plan") or []:
+    for i, step in enumerate(task.get("plan") or []):
         if step.get("status") in ("pending", "active", "error"):
-            out.append({"agent": step.get("agent"), "goal": step.get("goal") or task.get("goal")})
+            out.append({
+                "index": i,
+                "agent": step.get("agent"),
+                "goal": step.get("goal") or task.get("goal"),
+            })
     return [x for x in out if x.get("agent") and x.get("goal")]

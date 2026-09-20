@@ -28,7 +28,6 @@ def search_chats(query: str, limit: int = 30) -> list[dict[str, Any]]:
                     idx = body.lower().find(q)
                     start = max(0, idx - 40)
                     snippet = body[start : start + 160].replace("\n", " ")
-                break
         if score:
             hits.append(
                 {
@@ -38,10 +37,7 @@ def search_chats(query: str, limit: int = 30) -> list[dict[str, Any]]:
                     "score": score,
                 }
             )
-        if len(hits) >= limit * 3:
-            break
-    hits.sort(key=lambda x: (-x["score"], x["id"]), reverse=False)
-    hits.sort(key=lambda x: -x["score"])
+    hits.sort(key=lambda x: (-x["score"], x["id"]))
     return hits[:limit]
 
 
@@ -55,12 +51,17 @@ def extractive_compact(chat_id: str, keep_recent: int = 8) -> str:
     lines = ["# Compacted context (visible summary)", ""]
     if older:
         lines.append(f"## Earlier ({len(older)} messages, condensed)")
+        condensed = 0
         for m in older:
             role = m.get("role") or "user"
             text = (m.get("content") or "").replace("\n", " ").strip()
             if not text or role == "tool":
                 continue
             lines.append(f"- **{role}:** {text[:180]}")
+            condensed += 1
+            if condensed >= 40:
+                lines.append(f"- … {len(older) - condensed} older messages omitted")
+                break
         lines.append("")
     lines.append(f"## Recent ({len(recent)} messages kept verbatim in the log)")
     for m in recent:
@@ -70,6 +71,44 @@ def extractive_compact(chat_id: str, keep_recent: int = 8) -> str:
             continue
         lines.append(f"**{role}:** {text[:400]}")
         lines.append("")
+    return "\n".join(lines).strip()
+
+
+def recap_markdown(chat_id: str, extra: str = "") -> str:
+    """Codex/Claude-style /recap: structured recovery, not a transcript dump."""
+    msgs = read_chat_log(chat_id)
+    users = [m for m in msgs if (m.get("role") == "user" and (m.get("content") or "").strip())]
+    bots = [m for m in msgs if (m.get("role") == "assistant" and (m.get("content") or "").strip())]
+    last_user = (users[-1].get("content") or "").strip() if users else "(none)"
+    last_bot = (bots[-1].get("content") or "").strip() if bots else "(none)"
+    files = []
+    for m in msgs[-40:]:
+        text = m.get("content") or ""
+        for line in text.splitlines():
+            if "```ada-file:" in line:
+                files.append(line.split("```ada-file:", 1)[-1].strip())
+    files = list(dict.fromkeys(files))[:12]
+    lines = [
+        "# Recap",
+        "",
+        f"**chat_id:** `{chat_id}`",
+        f"**turns:** {len(msgs)}  (user {len(users)} / assistant {len(bots)})",
+        "",
+        "## Current task",
+        last_user[:800] or "(none)",
+        "",
+        "## Last assistant result",
+        last_bot[:1200] or "(none)",
+        "",
+        "## Files touched in this thread",
+        ("- " + "\n- ".join(files)) if files else "- (none recorded)",
+        "",
+        "## Next step",
+        "Resume the current task, or say `/btw …` for a side question that stays out of the main plan.",
+        "",
+    ]
+    if extra.strip():
+        lines.extend(["## Agent state", extra.strip(), ""])
     return "\n".join(lines).strip()
 
 

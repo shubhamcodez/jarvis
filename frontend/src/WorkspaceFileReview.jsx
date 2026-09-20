@@ -68,14 +68,19 @@ export function WorkspaceFileReview({
 
   useEffect(() => {
     if (filesState.length === 0) return
-    const next = new Map()
-    for (const { path, base, proposed } of filesState) {
-      const patch = structuredPatch(path, path, base, proposed, path, path, { context: 2 })
-      const n = patch.hunks?.length ?? 0
-      next.set(path, n ? new Set(Array.from({ length: n }, (_, i) => i)) : new Set())
-    }
-    setAcceptedByPath(next)
-    setApplyError(null)
+    setAcceptedByPath((prev) => {
+      const next = new Map()
+      for (const { path, base, proposed } of filesState) {
+        if (prev.has(path)) {
+          next.set(path, prev.get(path))
+          continue
+        }
+        const patch = structuredPatch(path, path, base, proposed, path, path, { context: 2 })
+        const n = patch.hunks?.length ?? 0
+        next.set(path, n ? new Set(Array.from({ length: n }, (_, i) => i)) : new Set())
+      }
+      return next
+    })
   }, [filesState])
 
   useEffect(() => {

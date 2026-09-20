@@ -41,7 +41,8 @@ def should_stop(state: dict[str, Any]) -> tuple[bool, str]:
         if not ok:
             return True, "spend_cap"
     except Exception:
-        pass
+        # Keep cancel/spend visible; do not silently disable them.
+        raise
     budget = state.get("budget") or {}
     used = int(budget.get("steps_used") or 0)
     max_steps = int(budget.get("max_steps") or 20)

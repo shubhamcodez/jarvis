@@ -460,7 +460,7 @@ export async function readProjectFileText(dirHandle, relPath, maxBytes = PREVIEW
     const last = i === parts.length - 1
     const kind = last ? 'file' : 'directory'
     const resolved = await getChildHandleCaseInsensitive(cur, seg, kind)
-    if (!resolved) return ''
+    if (!resolved) return null
     if (last) {
       const file = await resolved.handle.getFile()
       return readFileAsUtf8Limited(file, maxBytes)

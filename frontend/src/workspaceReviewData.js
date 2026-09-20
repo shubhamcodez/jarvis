@@ -33,7 +33,7 @@ export function useLoadedWorkspaceFiles(session, resolveBaseContent) {
     return () => {
       cancelled = true
     }
-  }, [session, resolveBaseContent])
+  }, [session?.id, resolveBaseContent])
 
   return filesState
 }

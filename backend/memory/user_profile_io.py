@@ -3,9 +3,24 @@ from __future__ import annotations
 
 import copy
 import json
+import threading
 from pathlib import Path
 
-_PROFILE_PATH = Path(__file__).resolve().parent / "user_profile.json"
+from config import data_root
+
+_LEGACY_PROFILE_PATH = Path(__file__).resolve().parent / "user_profile.json"
+_LOCK = threading.Lock()
+
+
+def _profile_path() -> Path:
+    dest = data_root() / "memory" / "user_profile.json"
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    if not dest.exists() and _LEGACY_PROFILE_PATH.is_file():
+        try:
+            dest.write_bytes(_LEGACY_PROFILE_PATH.read_bytes())
+        except OSError:
+            return _LEGACY_PROFILE_PATH
+    return dest
 
 _DEFAULT: dict = {
     "identity": {"name": None, "pronouns": None, "languages": None},
@@ -46,10 +61,11 @@ def deep_merge_defaults(data: dict | None) -> dict:
 
 
 def read_user_profile() -> dict:
-    if not _PROFILE_PATH.is_file():
+    path = _profile_path()
+    if not path.is_file():
         return deep_merge_defaults(None)
     try:
-        raw = json.loads(_PROFILE_PATH.read_text(encoding="utf-8"))
+        raw = json.loads(path.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError):
         return deep_merge_defaults(None)
     if not isinstance(raw, dict):
@@ -59,10 +75,12 @@ def read_user_profile() -> dict:
 
 def write_user_profile(data: dict) -> None:
     merged = deep_merge_defaults(data)
-    _PROFILE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    tmp = _PROFILE_PATH.with_suffix(".tmp.json")
-    tmp.write_text(
-        json.dumps(merged, indent=2, ensure_ascii=False) + "\n",
-        encoding="utf-8",
-    )
-    tmp.replace(_PROFILE_PATH)
+    path = _profile_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp.json")
+    with _LOCK:
+        tmp.write_text(
+            json.dumps(merged, indent=2, ensure_ascii=False) + "\n",
+            encoding="utf-8",
+        )
+        tmp.replace(path)

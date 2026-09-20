@@ -194,6 +194,8 @@ def try_weather_tool(
     if not location:
         return None
     if location == "current location":
-        location = _location_from_recent_turns(recent_turns) or "San Francisco"
+        location = _location_from_recent_turns(recent_turns)
+        if not location:
+            return None
     result = get_weather(location)
     return (location, result)

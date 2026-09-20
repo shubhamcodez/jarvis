@@ -29,11 +29,16 @@ def build_retrieval_query(
     if recent_turns:
         n = get_memory_query_recent_turns()
         recent = recent_turns[-n:]
+        # Skip the current user turn if it is already the last history item.
+        if current_message and recent:
+            last = (recent[-1].get("content") or "").strip()
+            if last == current_message:
+                recent = recent[:-1]
         for t in recent:
             role = (t.get("role") or "user").strip().lower()
             content = (t.get("content") or "").strip()
             if content:
-                parts.append(f"Recent ({role}): {content[:1500]}")
+                parts.append(f"Recent ({role}): {content[:400]}")
 
     if task_state:
         goal = (task_state.get("goal") or "").strip()
@@ -49,4 +54,7 @@ def build_retrieval_query(
     if topic_or_entities:
         parts.append("Relevant topics or entities: " + ", ".join(topic_or_entities))
 
-    return "\n".join(parts).strip() or "general context"
+    query = "\n".join(parts).strip()
+    if not query:
+        return ""
+    return query[:2500]

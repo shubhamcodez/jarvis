@@ -51,19 +51,37 @@ _SHELL_WRITE_HINTS = (
 )
 
 
+_SHELL_HIGH_IMPACT = (
+    "rm ",
+    "rmdir",
+    "rd ",
+    "del ",
+    "remove-item",
+    "ri ",
+    "set-content",
+    "out-file",
+    ">",
+    "git push",
+    "npm publish",
+    "format ",
+    "stop-computer",
+    "shutdown",
+)
+
+
 def classify_google_op(op: str) -> str:
     o = (op or "").strip().lower()
     if o in HIGH_IMPACT_GOOGLE_OPS:
-        if "delete" in o or o in ("gmail_send", "send_email", "send_message"):
-            return "high_impact"
-        return "write"
+        return "high_impact"
     return "read"
 
 
 def classify_shell_command(command: str) -> str:
     low = (command or "").lower()
+    if any(h in low for h in _SHELL_HIGH_IMPACT):
+        return "high_impact"
     if any(h in low for h in _SHELL_WRITE_HINTS):
-        return "high_impact" if any(h in low for h in ("rm ", "del ", "git push", "remove-item")) else "write"
+        return "write"
     return "read"
 
 
@@ -79,11 +97,11 @@ def needs_approval(risk: str, autonomy: Optional[str] = None) -> bool:
     if level in ("recommend", "draft"):
         return r in ("write", "high_impact")
     if level == "low_risk_auto":
-        return r in ("write", "high_impact")
+        return r == "high_impact"
     if level == "limited_auto":
         return r == "high_impact"
-    # gated (default)
-    return r == "high_impact"
+    # gated (default): confirm all writes
+    return r in ("write", "high_impact")
 
 
 def enqueue_approval(
@@ -106,6 +124,7 @@ def enqueue_approval(
         "_execute": execute,
     }
     with _LOCK:
+        _prune_pending_locked()
         _PENDING[approval_id] = rec
     public = {k: v for k, v in rec.items() if k != "_execute"}
     if chat_id:
@@ -119,13 +138,35 @@ def enqueue_approval(
     return public
 
 
+_PENDING_TTL_SEC = 6 * 60 * 60
+_PENDING_MAX = 80
+
+
+def _prune_pending_locked() -> None:
+    now = time.time()
+    stale = [
+        aid
+        for aid, rec in _PENDING.items()
+        if rec.get("status") != "pending"
+        or now - float(rec.get("created_at") or 0) > _PENDING_TTL_SEC
+    ]
+    for aid in stale:
+        _PENDING.pop(aid, None)
+    if len(_PENDING) > _PENDING_MAX:
+        oldest = sorted(_PENDING.items(), key=lambda kv: kv[1].get("created_at") or 0)
+        for aid, _ in oldest[: len(_PENDING) - _PENDING_MAX]:
+            _PENDING.pop(aid, None)
+
+
 def list_pending(chat_id: Optional[str] = None) -> list[dict[str, Any]]:
     with _LOCK:
+        _prune_pending_locked()
         items = []
         for rec in _PENDING.values():
             if rec.get("status") != "pending":
                 continue
-            if chat_id and rec.get("chat_id") and rec.get("chat_id") != chat_id:
+            rec_chat = rec.get("chat_id") or ""
+            if chat_id and rec_chat != chat_id:
                 continue
             items.append({k: v for k, v in rec.items() if k != "_execute"})
         return sorted(items, key=lambda x: x.get("created_at") or 0)

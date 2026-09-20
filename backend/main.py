@@ -31,7 +31,7 @@ warnings.filterwarnings(
 import json
 
 import httpx
-from fastapi import FastAPI, File, Form, Query, Request, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse, StreamingResponse
 from pydantic import BaseModel, Field
@@ -45,6 +45,7 @@ from config import (
     get_llm_provider,
     get_local_model_id,
     get_quiet_hours,
+    in_quiet_hours,
     get_run_mode,
     get_spend_limits,
     set_local_model_id,
@@ -61,13 +62,16 @@ from config import (
 )
 from agents.models import get_llm_client
 from agents.supervisor import compute_supervisor_decision
-from memory import get_memory_store, ingest_chat, run_retrieval_pipeline
+from memory import get_memory_store, ingest_chat, run_retrieval_pipeline, schedule_write_back
 from memory.user_profile_io import read_user_profile, write_user_profile
 from memory.chat_log import (
+    InvalidChatId,
     append_chat_log,
+    chat_exists,
     create_new_chat,
     delete_chat,
     get_current_chat_id,
+    is_valid_chat_id,
     list_chats,
     read_chat_log,
     set_current_chat,
@@ -163,10 +167,32 @@ async def _lifespan(_app: FastAPI):
         pause_inflight()
     except Exception:
         pass
+    try:
+        from observability.struct_log import configure_struct_logging
+
+        configure_struct_logging()
+    except Exception:
+        pass
+    try:
+        get_memory_store()
+    except Exception:
+        pass
+    try:
+        from observability.metrics import flush as flush_metrics
+
+        flush_metrics(force=True)
+    except Exception:
+        pass
     sched = asyncio.create_task(scheduler_loop())
     try:
         yield
     finally:
+        try:
+            from observability.metrics import flush as flush_metrics
+
+            flush_metrics(force=True)
+        except Exception:
+            pass
         sched.cancel()
         try:
             await sched
@@ -182,7 +208,9 @@ app.add_middleware(
         "http://localhost:5173",
         "http://127.0.0.1:5173",
         "http://localhost:1420",
+        "http://127.0.0.1:1420",
         "http://localhost:1430",
+        "http://127.0.0.1:1430",
         "http://tauri.localhost",
         "https://tauri.localhost",
         "tauri://localhost",
@@ -194,7 +222,55 @@ app.add_middleware(
 
 # WebSocket connections for desktop-agent-step broadcasts
 _ws_connections: list[WebSocket] = []
+_ws_lock = asyncio.Lock()
 _SENTINEL = object()
+_UPLOAD_ROOT = Path(__import__("tempfile").gettempdir()) / "ada-uploads"
+
+
+def _jail_attachment_paths(paths: Optional[list[str]]) -> list[str]:
+    """Only allow files under the upload temp dir; cap count and size."""
+    if not paths:
+        return []
+    root = _UPLOAD_ROOT.resolve()
+    out: list[str] = []
+    for raw in paths[:8]:
+        try:
+            p = Path(raw).expanduser().resolve()
+            p.relative_to(root)
+        except (OSError, ValueError):
+            continue
+        if not p.is_file():
+            continue
+        try:
+            if p.stat().st_size > 10 * 1024 * 1024:
+                continue
+        except OSError:
+            continue
+        out.append(str(p))
+    return out
+
+
+def _history_with_current(hist: Optional[list], message: str) -> Optional[list]:
+    """Ensure the current user turn is the last history item sent to the model."""
+    msg = (message or "").strip()
+    rows = list(hist or [])
+    if not msg:
+        return rows or None
+    if rows:
+        last = rows[-1]
+        if last.get("role") == "user" and (last.get("content") or "").strip() == msg:
+            return rows
+    rows.append({"role": "user", "content": msg})
+    return rows
+
+
+def _require_chat_id(chat_id: str) -> str:
+    try:
+        if not is_valid_chat_id(chat_id):
+            raise InvalidChatId("invalid chat id")
+        return chat_id
+    except InvalidChatId as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 def _sse_data(obj: dict) -> str:
@@ -251,12 +327,19 @@ async def _emit_agent_step(
     }
     if screenshot is not None:
         payload["screenshot"] = screenshot
-    for ws in _ws_connections[:]:
+    async with _ws_lock:
+        conns = list(_ws_connections)
+    dead: list[WebSocket] = []
+    for ws in conns:
         try:
-            await ws.send_json(payload)
+            await asyncio.wait_for(ws.send_json(payload), timeout=2.0)
         except Exception:
-            if ws in _ws_connections:
-                _ws_connections.remove(ws)
+            dead.append(ws)
+    if dead:
+        async with _ws_lock:
+            for ws in dead:
+                if ws in _ws_connections:
+                    _ws_connections.remove(ws)
 
 
 # --- Pydantic models ---
@@ -318,6 +401,17 @@ def _custom_agent_for_turn(custom_agent_id: Optional[str], chat_id: Optional[str
     return profile
 
 
+def _schedule_turn_writeback(chat_id: Optional[str], message: str, reply: str = "") -> None:
+    try:
+        schedule_write_back(
+            chat_id=chat_id or "",
+            user_message=message or "",
+            assistant_reply=reply or "",
+        )
+    except Exception:
+        pass
+
+
 def _merge_custom_agent_system(sys_content: Optional[str], profile: Optional[dict], message: str) -> Optional[str]:
     if not profile:
         return sys_content
@@ -330,6 +424,7 @@ def _merge_custom_agent_system(sys_content: Optional[str], profile: Optional[dic
 class AppendChatLogRequest(BaseModel):
     role: str
     content: str
+    chat_id: Optional[str] = None
 
 
 class SetCurrentChatRequest(BaseModel):
@@ -438,14 +533,26 @@ async def chatbot_response(body: ChatbotResponseRequest):
     t0 = time.perf_counter()
     try:
         from tools.runner import run_tools_for_turn
+        from memory.prompt_assembly import assemble_turn_context
+        from observability.spans import span
 
-        tool_sys, tool_used = await asyncio.to_thread(
-            run_tools_for_turn, msg, None, ws_q
-        )
-        system_content = (tool_sys or "").strip() or None
-        reply = await asyncio.to_thread(
-            client.chat, api_key, msg, paths if paths else None, None, system_content
-        )
+        with span("turn", route="chat", provider=provider):
+            tool_sys, tool_used = await asyncio.to_thread(
+                run_tools_for_turn, msg, None, ws_q
+            )
+            pack = assemble_turn_context(
+                user_message=msg,
+                tool_system=tool_sys or "",
+                untrusted_tools=bool(ws_q),
+            )
+            reply = await asyncio.to_thread(
+                client.chat,
+                api_key,
+                pack.user_message or msg,
+                paths if paths else None,
+                pack.history or None,
+                pack.system or None,
+            )
         trace_log(
             provider=provider,
             route="chat",
@@ -455,6 +562,7 @@ async def chatbot_response(body: ChatbotResponseRequest):
             duration_sec=time.perf_counter() - t0,
         )
         schedule_post_turn_observability()
+        _schedule_turn_writeback(None, msg, reply)
     except Exception as e:
         trace_log(
             provider=provider,
@@ -480,7 +588,7 @@ async def send_message(body: SendMessageRequest, request: Request):
     provider = get_llm_provider()
     api_key = get_llm_api_key()
     message = (body.message or "").strip()
-    attachment_paths = body.attachment_paths or []
+    attachment_paths = _jail_attachment_paths(body.attachment_paths)
     ws_q = (body.web_search_query or "").strip()
     if not message and ws_q:
         message = f"Summarize and answer based on a web search about: {ws_q}"
@@ -532,7 +640,7 @@ async def send_message(body: SendMessageRequest, request: Request):
         })
 
     async def drain_steps():
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         while True:
             try:
                 payload = await loop.run_in_executor(None, step_queue.get)
@@ -575,16 +683,19 @@ async def send_message(body: SendMessageRequest, request: Request):
     drain_task = asyncio.create_task(drain_steps())
     start = time.perf_counter()
     file_edits = None
+    from observability.spans import span
+
     try:
-        result = await graph.ainvoke(initial_state)
+        with span("turn", route="send-message", chat_id=chat_id or "", provider=provider):
+            result = await graph.ainvoke(initial_state)
         reply, file_edits = _strip_workspace_edits_from_reply(result.get("reply") or "No response.")
         route = result.get("route") or "chat"
         tool_used = result.get("tool_used")
         if tool_used and chat_id:
             set_current_chat(chat_id)
-            append_chat_log("tool", json.dumps(tool_used))
+            append_chat_log("tool", json.dumps(tool_used), chat_id=chat_id)
         extra = _trace_extra(result)
-        extra["step_count"] = extra.get("step_count")
+        extra["step_count"] = len((result.get("agent_state") or {}).get("plan") or [])
         trace_log(
             provider=provider,
             route=route,
@@ -595,6 +706,7 @@ async def send_message(body: SendMessageRequest, request: Request):
             extra=extra,
         )
         schedule_post_turn_observability()
+        _schedule_turn_writeback(chat_id, message, reply)
     except Exception as e:
         trace_log(
             provider=provider,
@@ -631,7 +743,7 @@ async def send_message_stream(body: SendMessageRequest, request: Request):
     provider = get_llm_provider()
     api_key = get_llm_api_key()
     message = (body.message or "").strip()
-    attachment_paths = body.attachment_paths or []
+    attachment_paths = _jail_attachment_paths(body.attachment_paths)
     ws_q = (body.web_search_query or "").strip()
     if not message and ws_q:
         message = f"Summarize and answer based on a web search about: {ws_q}"
@@ -680,7 +792,7 @@ async def send_message_stream(body: SendMessageRequest, request: Request):
     ):
         """Run sync chat_stream in executor and yield SSE as chunks arrive. Optional tool_used for final event."""
         chunk_queue = queue.Queue()
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         t0 = time.perf_counter()
 
         def producer():
@@ -739,59 +851,72 @@ async def send_message_stream(body: SendMessageRequest, request: Request):
                 duration_sec=time.perf_counter() - t0,
             )
             schedule_post_turn_observability()
+            _schedule_turn_writeback(chat_id_, trace_user_message_ or msg_, reply)
         payload = {"done": True, "reply": reply}
         if file_edits:
             payload["file_edits"] = file_edits
         if tool_used_:
             payload["tool_used"] = tool_used_
             if chat_id_:
-                set_current_chat(chat_id_)
-                append_chat_log("tool", json.dumps(tool_used_))
+                append_chat_log("tool", json.dumps(tool_used_), chat_id=chat_id_)
         yield f"data: {json.dumps(payload)}\n\n"
 
     def _chat_history_and_system():
-        """Every conversation: (1) load full history, (2) run tool calls (e.g. weather), (3) build system. Returns (hist, sys_content, tool_used)."""
-        # 1) Conversation history goes into every turn (same for all messages in this chat)
-        _lim = get_chat_history_limit()
-        hist = read_chat_log(chat_id)[-_lim:] if chat_id else None
-        sys_content = None
-        try:
-            from config import get_openai_api_key
-            store = get_memory_store()
-            if len(store) > 0:
-                sys_content, _ = run_retrieval_pipeline(
-                    store, get_openai_api_key(),
-                    current_message=message,
-                    recent_turns=hist or [],
-                    task_state={"route": "chat"},
-                    top_k=12,
-                    include_raw_top_n=4,
-                    max_memory_raw_chars=4500,
-                )
-                sys_content = (sys_content or "").strip() or None
-        except Exception:
-            pass
-        # 2) Tool calls: run applicable tools (weather app, etc.) using conversation context; then inject results
+        """Load history, retrieve memory, run tools, assemble a token-budgeted system pack."""
+        from config import get_openai_api_key
+        from memory.prompt_assembly import assemble_turn_context
+        from observability.metrics import incr, observe
+        from observability.spans import span
         from tools.runner import run_tools_for_turn
-        allowed = set(custom_profile.get("tools") or []) if custom_profile else None
-        tool_system, tool_used = run_tools_for_turn(
-            message or "",
-            recent_turns=hist or [],
-            web_search_query=ws_q or None,
-            allowed_tools=allowed,
-        )
-        if tool_system:
-            sys_content = (tool_system + "\n\n" + (sys_content or "")) if sys_content else tool_system
-        try:
-            from memory.prompt_assembly import build_policy_context
 
-            extra = build_policy_context(user_message=message or "")
-            if extra:
-                sys_content = (extra + "\n\n" + (sys_content or "")).strip()
-        except Exception:
-            pass
-        sys_final = (sys_content.strip() or None) if sys_content else None
-        sys_final = _merge_custom_agent_system(sys_final, custom_profile, message)
+        _lim = get_chat_history_limit()
+        raw_hist = list(read_chat_log(chat_id)[-_lim:] if chat_id else [])
+        recent_for_tools = _history_with_current(raw_hist, message) or []
+        memory_context = ""
+        with span("retrieval", chat_id=chat_id or "", route="chat") as sp:
+            try:
+                store = get_memory_store()
+                if len(store) > 0:
+                    try:
+                        key = get_openai_api_key()
+                    except ValueError:
+                        key = get_llm_api_key()
+                    memory_context, hits = run_retrieval_pipeline(
+                        store,
+                        key,
+                        current_message=message,
+                        recent_turns=recent_for_tools,
+                        task_state={"route": "chat"},
+                        top_k=8,
+                        include_raw_top_n=3,
+                        max_memory_raw_chars=1800,
+                    )
+                    memory_context = (memory_context or "").strip()
+                    sp.set(hits=len(hits), store_size=len(store))
+                    incr("retrieval.calls")
+                    observe("retrieval.hits", float(len(hits)))
+            except Exception as exc:
+                sp.fail(str(exc))
+        allowed = set(custom_profile.get("tools") or []) if custom_profile else None
+        with span("tools", chat_id=chat_id or ""):
+            tool_system, tool_used = run_tools_for_turn(
+                message or "",
+                recent_turns=recent_for_tools,
+                web_search_query=ws_q or None,
+                allowed_tools=allowed,
+            )
+        custom_sys_text = ""
+        if custom_profile:
+            custom_sys_text = build_agent_system_prompt(custom_profile, message or "") or ""
+        pack = assemble_turn_context(
+            user_message=message or "",
+            history=raw_hist,
+            memory_context=memory_context,
+            tool_system=tool_system or "",
+            custom_agent_system=custom_sys_text,
+            untrusted_tools=bool(ws_q),
+        )
+        sys_final = (pack.system or "").strip() or None
         if (coding_ctx or "").strip():
             inj = (
                 "\n\n## Project workspace (linked folder)\n"
@@ -803,7 +928,13 @@ async def send_message_stream(body: SendMessageRequest, request: Request):
                 "Other code fences are for examples only; only `ada-file:` openers become pending workspace edits."
             )
             sys_final = (sys_final + inj) if sys_final else inj.strip()
-        return hist, sys_final, tool_used
+        try:
+            observe("context.system_tokens", float(pack.stats.get("system_tokens") or 0))
+            observe("context.stable_tokens", float(pack.stats.get("stable_tokens") or 0))
+            observe("context.dynamic_tokens", float(pack.stats.get("dynamic_tokens") or 0))
+        except Exception:
+            pass
+        return pack.history or None, sys_final, tool_used
 
     async def event_stream():
         if chat_id and message and is_feedback_complaint(message):
@@ -869,23 +1000,8 @@ async def send_message_stream(body: SendMessageRequest, request: Request):
             return
 
         if not message:
-            yield _sse_data({"type": "status", "phase": "context", "message": "Loading context…"})
-            hist, sys, tool_used = await asyncio.to_thread(_chat_history_and_system)
-            yield _sse_data({"type": "status", "phase": "stream", "message": "Streaming reply…"})
-            async for line in _stream_chat_reply(
-                api_key,
-                "Hello.",
-                None,
-                hist,
-                sys,
-                tool_used,
-                chat_id,
-                provider_=provider,
-                trace_user_message_=message,
-                run_id_=stream_run_id,
-            ):
-                yield line
-            finish_run(stream_run_id)
+            finish_run(stream_run_id, "cancelled")
+            yield _sse_data({"done": True, "ok": False, "error": "empty message"})
             return
 
         yield _sse_data({"type": "status", "phase": "supervisor", "message": "Running supervisor…"})
@@ -1012,6 +1128,7 @@ async def send_message_stream(body: SendMessageRequest, request: Request):
             "custom_agent_tools": list(custom_profile.get("tools") or []) if custom_profile else None,
             "resume_task_id": body.resume_task_id,
             "run_id": stream_run_id,
+            "supervisor_decision": decision,
         }
         graph = _get_router_graph()
         stream_start = time.perf_counter()
@@ -1086,8 +1203,7 @@ async def send_message_stream(body: SendMessageRequest, request: Request):
             route = result.get("route") or "chat"
             tool_used = result.get("tool_used")
             if tool_used and chat_id:
-                set_current_chat(chat_id)
-                append_chat_log("tool", json.dumps(tool_used))
+                append_chat_log("tool", json.dumps(tool_used), chat_id=chat_id)
             extra = _trace_extra(result)
             trace_log(
                 provider=provider,
@@ -1099,6 +1215,7 @@ async def send_message_stream(body: SendMessageRequest, request: Request):
                 extra=extra,
             )
             schedule_post_turn_observability()
+            _schedule_turn_writeback(chat_id, message, reply)
         except Exception as e:
             trace_log(
                 provider=provider,
@@ -1145,7 +1262,10 @@ async def send_message_stream(body: SendMessageRequest, request: Request):
 # --- Chat log ---
 @app.post("/chat/append")
 async def api_append_chat_log(body: AppendChatLogRequest):
-    append_chat_log(body.role, body.content)
+    try:
+        append_chat_log(body.role, body.content, chat_id=body.chat_id)
+    except InvalidChatId as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {}
 
 
@@ -1172,6 +1292,9 @@ async def api_search_chats(q: str = Query("", min_length=0), limit: int = 30):
 async def api_compact_chat(body: SetCurrentChatRequest):
     from memory.chat_search import extractive_compact
 
+    _require_chat_id(body.chat_id)
+    if not chat_exists(body.chat_id):
+        raise HTTPException(status_code=404, detail="unknown chat")
     return {"ok": True, "summary": extractive_compact(body.chat_id)}
 
 
@@ -1182,6 +1305,28 @@ async def api_handoff(chat_id: str):
 
     extra = structured_view(load_state(chat_id))
     return {"ok": True, "markdown": handoff_markdown(chat_id, extra)}
+
+
+@app.get("/chat/recap/{chat_id}")
+async def api_recap(chat_id: str):
+    from memory.chat_search import recap_markdown
+    from agents.agent_state import load_state, structured_view
+
+    extra = structured_view(load_state(chat_id))
+    return {"ok": True, "markdown": recap_markdown(chat_id, extra)}
+
+
+class ReactionRequest(BaseModel):
+    chat_id: str = ""
+    vote: str
+    excerpt: str = ""
+
+
+@app.post("/chat/reaction")
+async def api_reaction(body: ReactionRequest):
+    from memory.reactions import add_reaction
+
+    return add_reaction(body.chat_id, body.vote, body.excerpt)
 
 
 @app.get("/bookmarks")
@@ -1208,7 +1353,10 @@ async def api_add_bookmark(body: BookmarkAddRequest):
 async def api_delete_bookmark(bookmark_id: str):
     from memory.bookmarks import remove_bookmark
 
-    return {"ok": remove_bookmark(bookmark_id)}
+    ok = remove_bookmark(bookmark_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="unknown bookmark")
+    return {"ok": True}
 
 
 @app.get("/observability/usage")
@@ -1232,7 +1380,10 @@ async def api_usage():
 
 @app.post("/chat/set-current")
 async def api_set_current_chat(body: SetCurrentChatRequest):
-    set_current_chat(body.chat_id)
+    try:
+        set_current_chat(body.chat_id)
+    except InvalidChatId as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {}
 
 
@@ -1243,13 +1394,21 @@ async def api_get_current_chat_id():
 
 @app.get("/chat/read/{chat_id}")
 async def api_read_chat_log(chat_id: str):
-    return read_chat_log(chat_id)
+    try:
+        return read_chat_log(chat_id)
+    except InvalidChatId as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @app.delete("/chat/{chat_id}")
 async def api_delete_chat(chat_id: str):
     """Delete a chat by id. Returns ok and deleted=true if the chat was removed."""
-    deleted = delete_chat(chat_id)
+    try:
+        deleted = delete_chat(chat_id)
+    except InvalidChatId as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if not deleted:
+        raise HTTPException(status_code=404, detail="unknown chat")
     return {"ok": True, "deleted": deleted}
 
 
@@ -1309,10 +1468,28 @@ async def api_memory_ingest(body: IngestChatRequest):
     try:
         api_key = get_openai_api_key()
     except Exception as e:
-        return {"ok": False, "error": str(e), "chunks_added": 0}
+        raise HTTPException(status_code=400, detail=str(e)) from e
     store = get_memory_store()
     n = ingest_chat(store, api_key, body.chat_id)
-    return {"ok": True, "chunks_added": n}
+    return {"ok": True, "chunks_added": n, "store_size": len(store)}
+
+
+@app.get("/memory/status")
+async def api_memory_status():
+    """Episodic store size, fact count, and context token budgets."""
+    from config import get_context_budgets
+    from memory.facts import list_facts
+
+    store = get_memory_store()
+    facts = list_facts(limit=200)
+    return {
+        "episodic_chunks": len(store),
+        "facts": len(facts),
+        "budgets": get_context_budgets(),
+        "persistent": True,
+        "hybrid_search": True,
+        "writeback": True,
+    }
 
 
 @app.get("/memory/user-profile")
@@ -1336,8 +1513,11 @@ async def api_get_chats_storage_path():
 
 @app.post("/storage/chats-path")
 async def api_set_chats_storage_path(body: SetStoragePathRequest):
-    set_chats_storage_path(body.path)
-    return {}
+    try:
+        resolved = set_chats_storage_path(body.path)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"ok": True, "path": resolved}
 
 
 # --- Settings: LLM model / provider ---
@@ -1816,6 +1996,30 @@ async def api_get_traces(limit: int = 500):
     return {"traces": list_traces(limit=limit)}
 
 
+@app.get("/observability/spans")
+async def api_get_spans(limit: int = 200, trace_id: Optional[str] = None):
+    """Hierarchical turn spans (retrieval, tools, llm, specialists)."""
+    from observability.spans import list_spans
+
+    return {"spans": list_spans(limit=max(1, min(limit, 2000)), trace_id=trace_id)}
+
+
+@app.get("/observability/metrics")
+async def api_get_metrics():
+    """In-process counters/histograms plus last flushed snapshot."""
+    from observability.metrics import load_latest, snapshot
+
+    return {"live": snapshot(), "persisted": load_latest()}
+
+
+@app.get("/observability/logs")
+async def api_get_struct_logs(limit: int = 200):
+    """Tail structured JSON application logs."""
+    from observability.struct_log import list_recent_logs
+
+    return {"logs": list_recent_logs(limit=max(1, min(limit, 2000)))}
+
+
 @app.post("/observability/feedback-assess")
 async def api_feedback_assess(body: FeedbackAssessRequest):
     """
@@ -1893,19 +2097,25 @@ async def send_message_with_files(
     files: list[UploadFile] = File(default=[]),
 ):
     """Accept multipart form: message + files. Saves files to temp and calls send_message."""
-    import tempfile
     import os
+    import re
+    import uuid
+
     paths = []
+    _UPLOAD_ROOT.mkdir(parents=True, exist_ok=True)
     try:
-        for f in files:
+        for f in files[:8]:
             if not f.filename:
                 continue
-            ext = os.path.splitext(f.filename)[1] or ".bin"
-            fd, path = tempfile.mkstemp(suffix=ext)
-            os.close(fd)
-            with open(path, "wb") as out:
-                out.write(await f.read())
-            paths.append(path)
+            ext = os.path.splitext(f.filename)[1].lower()
+            if not re.fullmatch(r"\.[a-z0-9]{1,8}", ext or ""):
+                ext = ".bin"
+            path = _UPLOAD_ROOT / f"{uuid.uuid4().hex}{ext}"
+            data = await f.read()
+            if len(data) > 10 * 1024 * 1024:
+                raise HTTPException(status_code=413, detail="attachment too large")
+            path.write_bytes(data)
+            paths.append(str(path))
         body = SendMessageRequest(
             message=message.strip(),
             attachment_paths=paths if paths else None,
@@ -1929,15 +2139,17 @@ async def send_message_with_files(
 @app.websocket("/ws/agent-steps")
 async def websocket_agent_steps(ws: WebSocket):
     await ws.accept()
-    _ws_connections.append(ws)
+    async with _ws_lock:
+        _ws_connections.append(ws)
     try:
         while True:
             await ws.receive_text()
     except WebSocketDisconnect:
         pass
     finally:
-        if ws in _ws_connections:
-            _ws_connections.remove(ws)
+        async with _ws_lock:
+            if ws in _ws_connections:
+                _ws_connections.remove(ws)
 
 
 # --- Tools ---
@@ -1965,7 +2177,27 @@ async def api_tools_grep(
     """
     raw_root = (root or "").strip()
     if raw_root:
-        base = Path(raw_root).expanduser()
+        allowed = get_grep_root()
+        try:
+            base = Path(raw_root).expanduser().resolve()
+        except OSError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if allowed is None or not str(base).startswith(str(allowed.resolve())):
+            ws = ""
+            try:
+                from config import get_workspace_root
+
+                ws = (get_workspace_root() or "").strip()
+            except Exception:
+                ws = ""
+            if ws:
+                try:
+                    wr = Path(ws).expanduser().resolve()
+                    base.relative_to(wr)
+                except (OSError, ValueError) as exc:
+                    raise HTTPException(status_code=403, detail="grep root is not allowed") from exc
+            else:
+                raise HTTPException(status_code=403, detail="grep root is not allowed")
     else:
         gr = get_grep_root()
         if gr is None:
@@ -1992,7 +2224,7 @@ async def api_tools_web_search(body: WebSearchRequest):
 
     q = (body.query or "").strip()
     if not q:
-        return {"ok": False, "error": "empty query", "results_text": ""}
+        raise HTTPException(status_code=400, detail="empty query")
     text = await asyncio.to_thread(search_web, q)
     return {"ok": True, "query": q, "results_text": text}
 
@@ -2016,10 +2248,12 @@ async def api_tools_shell(body: ShellRunRequest):
     Disabled only if ADA_ENABLE_SHELL=0 or ADA_DISABLE_SHELL=1. Dangerous — do not expose publicly.
     """
     if not is_shell_enabled():
-        return {
-            "ok": False,
-            "error": "Shell disabled on server (remove ADA_DISABLE_SHELL or set ADA_ENABLE_SHELL=1).",
-        }
+        raise HTTPException(
+            status_code=403,
+            detail="Shell disabled on server (remove ADA_DISABLE_SHELL or set ADA_ENABLE_SHELL=1).",
+        )
+    if in_quiet_hours():
+        raise HTTPException(status_code=403, detail="Quiet hours are enabled; shell is paused.")
     from agents.hitl import maybe_gate_shell
 
     result = await asyncio.to_thread(
@@ -2036,7 +2270,7 @@ async def health():
     try:
         from agents.hardware import detect_hardware
 
-        raw = detect_hardware()
+        raw = await asyncio.to_thread(detect_hardware)
         hw = {
             "os": raw.get("os"),
             "arch": raw.get("arch"),
@@ -2059,5 +2293,5 @@ if __name__ == "__main__":
     # So imports (config, agents, …) work even if you run from repo root
     os.chdir(os.path.dirname(os.path.abspath(__file__)))
     port = int(os.environ.get("PORT", "8000"))
-    reload = os.environ.get("UVICORN_RELOAD", "1").lower() not in ("0", "false", "no")
+    reload = os.environ.get("UVICORN_RELOAD", "0").lower() in ("1", "true", "yes")
     uvicorn.run("main:app", host="127.0.0.1", port=port, reload=reload)

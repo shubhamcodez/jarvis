@@ -74,7 +74,9 @@ RG_TIMEOUT_SEC = 120.0
 
 def _rg_globs_for_ignores() -> list[str]:
     """Map ignore dir names to ripgrep --glob '!**/name/**' (best-effort)."""
-    return [f"!**/{name}/**" for name in sorted(IGNORE_DIR_NAMES)]
+    globs = [f"!**/{name}/**" for name in sorted(IGNORE_DIR_NAMES)]
+    globs.extend(["!**/.env", "!**/.env.*", "!**/*.pem", "!**/*.key"])
+    return globs
 
 
 def search_with_ripgrep(
@@ -103,7 +105,7 @@ def search_with_ripgrep(
         "--threads",
         str(min(8, (os.cpu_count() or 4))),
         "--max-count",
-        str(max(1, max_results // 10 + 1)),
+        str(max(1, max_results)),
         "--max-columns",
         "400",
         "--max-columns-preview",
@@ -127,7 +129,9 @@ def search_with_ripgrep(
             timeout=RG_TIMEOUT_SEC,
             shell=False,
         )
-    except (subprocess.TimeoutExpired, OSError):
+    except subprocess.TimeoutExpired:
+        return [], True, True
+    except OSError:
         return [], False, False
 
     if proc.returncode not in (0, 1):
@@ -217,6 +221,8 @@ def search_python_scan(
             except OSError:
                 continue
             suf = fp.suffix.lower()
+            if name.lower() in {".env", ".env.local", ".env.production"} or suf in {".pem", ".key", ".p12"}:
+                continue
             if suf in SKIP_EXTENSIONS:
                 continue
             try:

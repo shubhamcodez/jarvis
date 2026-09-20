@@ -27,6 +27,8 @@ class SearchResult:
     summary: Optional[str] = None
     metadata: dict[str, Any] = field(default_factory=dict)
     raw_content: Optional[str] = None  # Populated for top-k when injecting into prompt
+    source_type: str = "chat"
+    source_id: str = ""
 
 
 @dataclass

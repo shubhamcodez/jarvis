@@ -139,15 +139,29 @@ def available() -> bool:
     return binary_path() is not None
 
 
+def _safe_extract_member(dest: Path, name: str) -> Path:
+    target = (dest / name).resolve()
+    target.relative_to(dest.resolve())
+    return target
+
+
 def _extract(archive: Path, dest: Path) -> None:
     dest.mkdir(parents=True, exist_ok=True)
+    dest = dest.resolve()
     name = archive.name.lower()
     if name.endswith(".zip"):
         with zipfile.ZipFile(archive, "r") as zf:
+            for info in zf.infolist():
+                _safe_extract_member(dest, info.filename)
             zf.extractall(dest)
         return
     with tarfile.open(archive, "r:*") as tf:
-        tf.extractall(dest)
+        try:
+            tf.extractall(dest, filter="data")
+        except TypeError:
+            for member in tf.getmembers():
+                _safe_extract_member(dest, member.name)
+            tf.extractall(dest)
 
 
 def ensure_binary(progress_cb=None) -> Path:
@@ -255,7 +269,7 @@ def start_server(model_path: str, n_ctx: int = 4096) -> str:
         try:
             with httpx.Client(timeout=2.0) as client:
                 h = client.get(f"{base}/health")
-                if h.status_code < 500:
+                if h.status_code == 200:
                     return f"{base}/v1"
         except Exception as e:
             last_err = str(e)

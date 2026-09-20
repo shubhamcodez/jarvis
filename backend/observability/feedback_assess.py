@@ -46,10 +46,12 @@ def is_feedback_complaint(text: str) -> bool:
         "bad reply",
         "wasn't helpful",
         "was not helpful",
-        "not helpful",
+        "this response was not helpful",
+        "this reply was not helpful",
         "wrong answer",
-        "something's wrong",
-        "something is wrong",
+        "something's wrong with this response",
+        "something is wrong with this response",
+        "something is wrong with this reply",
         "not a good response",
         "poor response",
         "terrible response",
@@ -96,8 +98,10 @@ def _pick_assessor_key_and_provider() -> tuple[str, str]:
         return get_openai_api_key(), "openai"
     except ValueError:
         pass
-    k = get_xai_api_key()
-    return k, "xai"
+    try:
+        return get_xai_api_key(), "xai"
+    except ValueError as exc:
+        raise ValueError("No assessor API key configured") from exc
 
 
 def _other_provider(p: str) -> str:

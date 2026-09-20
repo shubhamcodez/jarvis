@@ -242,6 +242,56 @@ def _parse_code_from_llm(raw: str) -> Optional[str]:
     return None
 
 
+def _swe_workspace_root(explicit: Optional[str] = None) -> str:
+    raw = (explicit or "").strip()
+    if raw:
+        from pathlib import Path
+
+        p = Path(raw).expanduser()
+        if p.is_dir():
+            return str(p.resolve())
+    try:
+        from config import get_workspace_root
+
+        linked = (get_workspace_root() or "").strip()
+        if linked:
+            from pathlib import Path
+
+            p = Path(linked).expanduser()
+            if p.is_dir():
+                return str(p.resolve())
+    except Exception:
+        pass
+    return ""
+
+
+def _use_swe_loop(goal: str, workspace_root: str, project_context: str) -> bool:
+    if not workspace_root:
+        return False
+    if _likely_repo_edit_without_sandbox(goal):
+        return True
+    g = (goal or "").lower()
+    swe_signals = (
+        "failing test",
+        "unit test",
+        "regression",
+        "github issue",
+        "stack trace",
+        "traceback",
+        "typeerror",
+        "attributeerror",
+        "pull request",
+        "repo",
+        "codebase",
+        "workspace",
+    )
+    if any(s in g for s in swe_signals):
+        return True
+    if len(project_context) > 100 and any(s in g for s in ("fix", "implement", "refactor", "add ", "edit ")):
+        return True
+    return False
+
+
 def run_coding_agent(
     goal: str,
     on_step: Optional[Callable] = None,
@@ -249,9 +299,12 @@ def run_coding_agent(
     provider: str = "openai",
     *,
     project_context: Optional[str] = None,
+    workspace_root: Optional[str] = None,
+    apply_writes: bool = False,
 ) -> tuple[str, dict]:
     """
-    Plan (short) → generate Python → sandbox → optional one retry → formatted reply.
+    Repo tasks: localize → patch → test → critic (overlay worktree).
+    Compute/plot tasks: generate Python → sandbox → optional one retry.
     Returns (reply_text, tool_used for chat log / UI).
     """
     if api_key is None:
@@ -266,6 +319,20 @@ def run_coding_agent(
     ctx_full = (project_context or "").strip()
     if len(ctx_full) > _MAX_PROJECT_CONTEXT_CHARS:
         ctx_full = ctx_full[: _MAX_PROJECT_CONTEXT_CHARS].rstrip() + "\n\n…"
+
+    root = _swe_workspace_root(workspace_root)
+    if _use_swe_loop(goal, root, ctx_full):
+        from agents.swe_loop import run_swe_loop
+
+        return run_swe_loop(
+            goal,
+            root,
+            on_step=on_step,
+            api_key=api_key,
+            provider=provider,
+            apply_writes=apply_writes,
+            project_context=ctx_full,
+        )
 
     if len(ctx_full) > 100 and _likely_repo_edit_without_sandbox(goal):
         plan = (
@@ -399,7 +466,7 @@ def run_coding_agent(
     tool_used = {
         "name": "python_sandbox",
         "input": code[:4000] + ("…" if len(code) > 4000 else ""),
-        "result": json.dumps(result, ensure_ascii=False)[:8000],
+        "result": json.dumps(redact_sandbox_result_dict(result), ensure_ascii=False)[:8000],
     }
 
     stdout = (result.get("stdout") or "").strip()

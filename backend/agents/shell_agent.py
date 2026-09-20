@@ -53,6 +53,7 @@ def run_shell_agent(
     provider: str = "openai",
     max_steps: int = 15,
     chat_id: Optional[str] = None,
+    run_id: Optional[str] = None,
 ) -> tuple[str, dict]:
     """
     Multi-turn: model proposes command → run on host → feed output back.
@@ -108,6 +109,15 @@ def run_shell_agent(
     last_tool_result = ""
 
     for step_i in range(1, max_steps + 1):
+        if run_id:
+            try:
+                from agents.run_control import is_cancelled
+
+                if is_cancelled(run_id):
+                    transcript.append("Stopped by user.")
+                    break
+            except Exception:
+                pass
         raw = call_llm()
         data = _parse_shell_json(raw) or {}
         thought = str(data.get("thought") or "").strip()

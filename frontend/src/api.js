@@ -19,10 +19,14 @@ const API_BASE = getApiBase()
 
 async function request(path, options = {}) {
   const url = path.startsWith('http') ? path : `${API_BASE}${path}`;
+  const headers = { ...(options.headers || {}) };
+  if (options.body != null && !headers['Content-Type'] && !headers['content-type']) {
+    headers['Content-Type'] = 'application/json';
+  }
   const res = await fetch(url, {
     credentials: 'include',
     ...options,
-    headers: { 'Content-Type': 'application/json', ...options.headers },
+    headers,
   });
   if (!res.ok) {
     const text = await res.text();
@@ -137,8 +141,13 @@ export async function sendMessageStream(
     buffer = lines.pop() || ''
     for (const line of lines) {
       if (line.startsWith('data: ')) {
+        let data
         try {
-          const data = JSON.parse(line.slice(6))
+          data = JSON.parse(line.slice(6))
+        } catch {
+          continue
+        }
+        try {
           if (data.type === 'status') {
             onStatus?.(data)
             continue
@@ -175,7 +184,7 @@ export async function sendMessageStream(
       }
     }
   }
-  if (full) onDone?.(full)
+  if (full) onDone?.(full, null)
   return { reply: full, tool_used: toolUsed, file_edits: null, pending_approvals: null }
   } catch (err) {
     if (err?.name === 'AbortError' || signal?.aborted) {
@@ -203,7 +212,6 @@ export async function sendMessageWithFiles(
   if (codingMode) form.append('coding_mode', 'true');
   if (codingProjectSnapshot) form.append('coding_project_snapshot', codingProjectSnapshot);
   if (customAgentId) form.append('custom_agent_id', customAgentId);
-  if (customAgentId) form.append('custom_agent_id', customAgentId);
   for (const f of files) {
     form.append('files', f);
   }
@@ -215,10 +223,10 @@ export async function sendMessageWithFiles(
   return data.reply;
 }
 
-export async function appendChatLog(role, content) {
+export async function appendChatLog(role, content, chatId = null) {
   await request('/chat/append', {
     method: 'POST',
-    body: JSON.stringify({ role, content }),
+    body: JSON.stringify({ role, content, chat_id: chatId || undefined }),
   });
 }
 
@@ -250,7 +258,7 @@ export async function getCurrentChatId() {
 }
 
 export async function readChatLog(chatId) {
-  return request(`/chat/read/${chatId}`);
+  return request(`/chat/read/${encodeURIComponent(chatId)}`);
 }
 
 export async function getChatsStoragePath() {
@@ -474,6 +482,17 @@ export async function getChatHandoff(chatId) {
   return request(`/chat/handoff/${encodeURIComponent(chatId)}`)
 }
 
+export async function getChatRecap(chatId) {
+  return request(`/chat/recap/${encodeURIComponent(chatId)}`)
+}
+
+export async function reactToReply(chatId, vote, excerpt = '') {
+  return request('/chat/reaction', {
+    method: 'POST',
+    body: JSON.stringify({ chat_id: chatId || '', vote, excerpt }),
+  })
+}
+
 export async function listBookmarks() {
   return request('/bookmarks')
 }
@@ -491,6 +510,24 @@ export async function deleteBookmark(id) {
 
 export async function getUsageStats() {
   return request('/observability/usage')
+}
+
+export async function getObservabilitySpans(limit = 200, traceId) {
+  const q = new URLSearchParams({ limit: String(limit) })
+  if (traceId) q.set('trace_id', traceId)
+  return request(`/observability/spans?${q}`)
+}
+
+export async function getObservabilityMetrics() {
+  return request('/observability/metrics')
+}
+
+export async function getObservabilityLogs(limit = 200) {
+  return request(`/observability/logs?limit=${limit}`)
+}
+
+export async function getMemoryStatus() {
+  return request('/memory/status')
 }
 
 export async function pickWorkspaceFolderNative() {

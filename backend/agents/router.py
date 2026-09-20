@@ -18,14 +18,21 @@ async def _supervisor_node(state: RouterState) -> RouterState:
     message = (state.get("message") or "").strip()
     api_key = state["api_key"]
     provider = state.get("provider") or "openai"
-    decision = await asyncio.to_thread(
-        compute_supervisor_decision,
-        api_key,
-        provider,
-        message,
-        coding_mode=bool(state.get("coding_mode")),
-        coding_project_context=(state.get("coding_project_context") or ""),
-    )
+    existing = state.get("supervisor_decision")
+    from observability.spans import span
+
+    with span("supervisor", provider=provider):
+        if isinstance(existing, dict) and (existing.get("agents") or existing.get("agent") or existing.get("run_agent") is False):
+            decision = existing
+        else:
+            decision = await asyncio.to_thread(
+                compute_supervisor_decision,
+                api_key,
+                provider,
+                message,
+                coding_mode=bool(state.get("coding_mode")),
+                coding_project_context=(state.get("coding_project_context") or ""),
+            )
     agents = decision.get("agents") or []
     tools = state.get("custom_agent_tools")
     if tools is not None:
@@ -68,11 +75,9 @@ async def _supervisor_node(state: RouterState) -> RouterState:
         task = get_task(resume_id)
         if task:
             ast = resume_run(state.get("chat_id") or task.get("chat_id"), task)
-            leftover = [
-                {"agent": s.get("agent"), "goal": s.get("goal")}
-                for s in (task.get("plan") or [])
-                if s.get("status") in ("pending", "active", "error") and s.get("agent")
-            ]
+            from agents.tasks import remaining_plan
+
+            leftover = remaining_plan(task)
             if leftover:
                 decision = {**decision, "run_agent": True, "agents": leftover}
                 agents = leftover
@@ -105,7 +110,7 @@ async def _supervisor_node(state: RouterState) -> RouterState:
 
 async def _chat_node(state: RouterState) -> RouterState:
     from agents.models import get_llm_client
-    from config import get_chat_history_limit, get_openai_api_key
+    from config import get_chat_history_limit, get_llm_api_key, get_openai_api_key
     from memory import get_memory_store, run_retrieval_pipeline
     from memory.chat_log import read_chat_log
 
@@ -123,61 +128,76 @@ async def _chat_node(state: RouterState) -> RouterState:
     max_history = get_chat_history_limit()
     history = recent_turns[-max_history:] if recent_turns else None
 
-    # Retrieval: current conversation → query → vector search → inject as system context
-    memory_context = ""
-    try:
-        store = get_memory_store()
-        if len(store) > 0:
-            openai_api_key = get_openai_api_key()
-            task_state = {"goal": state.get("goal"), "route": "chat"}
-            memory_context, _ = run_retrieval_pipeline(
-                store,
-                openai_api_key,
-                current_message=message,
-                recent_turns=recent_turns,
-                task_state=task_state,
-                top_k=12,
-                include_raw_top_n=4,
-                max_memory_raw_chars=4500,
-            )
-    except Exception:
-        pass
-
-    # Tool calls: every turn has conversation; then run applicable tools (weather, etc.) and inject results
-    wq = (state.get("web_search_query") or "").strip() or None
-    allowed = state.get("custom_agent_tools")
-    tool_system, tool_used = run_tools_for_turn(
-        message or "",
-        recent_turns=recent_turns or [],
-        web_search_query=wq,
-        allowed_tools=set(allowed) if allowed is not None else None,
-    )
-    from memory.prompt_assembly import build_policy_context
+    from memory.prompt_assembly import assemble_turn_context
     from tools.project_rules import load_project_rules
     from .agent_state import structured_view
     from .task_spec import format_task_spec_for_prompt
+    from observability.spans import span
+
+    memory_context = ""
+    with span("retrieval", chat_id=chat_id, route="chat") as sp:
+        try:
+            store = get_memory_store()
+            if len(store) > 0:
+                try:
+                    openai_api_key = get_openai_api_key()
+                except ValueError:
+                    openai_api_key = get_llm_api_key()
+                task_state = {"goal": state.get("goal"), "route": "chat"}
+                memory_context, hits = run_retrieval_pipeline(
+                    store,
+                    openai_api_key,
+                    current_message=message,
+                    recent_turns=recent_turns,
+                    task_state=task_state,
+                    top_k=8,
+                    include_raw_top_n=3,
+                    max_memory_raw_chars=1800,
+                )
+                sp.set(hits=len(hits), store_size=len(store))
+                try:
+                    from observability.metrics import incr, observe
+
+                    incr("retrieval.calls")
+                    observe("retrieval.hits", float(len(hits)))
+                except Exception:
+                    pass
+        except Exception as exc:
+            sp.fail(str(exc))
+
+    wq = (state.get("web_search_query") or "").strip() or None
+    allowed = state.get("custom_agent_tools")
+    with span("tools", chat_id=chat_id):
+        tool_system, tool_used = run_tools_for_turn(
+            message or "",
+            recent_turns=recent_turns or [],
+            web_search_query=wq,
+            allowed_tools=set(allowed) if allowed is not None else None,
+        )
 
     rules = load_project_rules()
     mem = ((rules + "\n\n") if rules else "") + (memory_context or "")
-    system_content = build_policy_context(
-        task_spec_text=format_task_spec_for_prompt(state.get("task_spec") or {}),
-        agent_state_text=structured_view(state.get("agent_state") or {}),
+    pack = assemble_turn_context(
+        user_message=message,
+        history=history,
         memory_context=mem,
         tool_system=tool_system or "",
-        untrusted_note=bool(wq),
-        user_message=message,
-    ).strip() or None
-    extra_sys = (state.get("custom_agent_system") or "").strip()
-    if extra_sys:
-        system_content = (extra_sys + "\n\n" + (system_content or "")).strip() or extra_sys
-    reply = await asyncio.to_thread(
-        client.chat,
-        api_key,
-        message or "Hello.",
-        paths if paths else None,
-        history,
-        system_content,
+        task_spec_text=format_task_spec_for_prompt(state.get("task_spec") or {}),
+        agent_state_text=structured_view(state.get("agent_state") or {}),
+        custom_agent_system=(state.get("custom_agent_system") or "").strip(),
+        untrusted_tools=bool(wq),
     )
+    system_content = pack.system or None
+    with span("llm", provider=provider, route="chat") as sp:
+        reply = await asyncio.to_thread(
+            client.chat,
+            api_key,
+            pack.user_message or message or "Hello.",
+            paths if paths else None,
+            pack.history or None,
+            system_content,
+        )
+        sp.set(**{k: pack.stats.get(k) for k in ("system_tokens", "stable_tokens", "dynamic_tokens")})
     out: RouterState = {"reply": reply, "route": "chat"}
     if tool_used:
         out["tool_used"] = tool_used
@@ -303,67 +323,94 @@ async def _run_agent_plan_node(state: RouterState) -> RouterState:
         wrapped = _wrap_on_step_for_plan(on_step, idx, str(agent))
 
         from .agent_state import mark_plan_step, record_action_signature, record_error
+        from observability.spans import span
 
         ast = state.get("agent_state") or {}
         try:
-            if agent == "desktop":
-                reply = await asyncio.to_thread(
-                    run_desktop_agent,
-                    goal_run,
-                    10,
-                    wrapped,
-                    api_key=api_key,
-                    provider=provider,
-                )
-                tu = None
-            elif agent == "coding":
-                reply, tu = await asyncio.to_thread(
-                    run_coding_agent,
-                    goal_run,
-                    wrapped,
-                    api_key,
-                    provider,
-                    project_context=state.get("coding_project_context") or None,
-                )
-            elif agent == "shell":
-                reply, tu = await asyncio.to_thread(
-                    run_shell_agent,
-                    goal_run,
-                    wrapped,
-                    api_key,
-                    provider,
-                    chat_id=state.get("chat_id"),
-                )
-            elif agent == "finance":
-                reply, tu = await asyncio.to_thread(
-                    run_finance_agent, goal_run, wrapped, api_key, provider
-                )
-            elif agent == "google":
-                reply, tu = await asyncio.to_thread(
-                    run_google_workspace_agent,
-                    goal_run,
-                    state.get("google_session_id"),
-                    wrapped,
-                    api_key,
-                    provider,
-                    state.get("chat_id"),
-                )
-            else:
-                continue
+            with span("specialist", agent=str(agent), index=idx, run_id=run_id or ""):
+                if agent == "desktop":
+                    from agents.computer_use.budget import parse_duration, steps_for_budget
+
+                    dur = parse_duration(goal_run)
+                    steps = steps_for_budget(dur, 25)
+                    reply = await asyncio.to_thread(
+                        run_desktop_agent,
+                        goal_run,
+                        steps,
+                        wrapped,
+                        api_key=api_key,
+                        provider=provider,
+                        duration_sec=dur,
+                        run_id=run_id,
+                    )
+                    tu = None
+                elif agent == "coding":
+                    reply, tu = await asyncio.to_thread(
+                        run_coding_agent,
+                        goal_run,
+                        wrapped,
+                        api_key,
+                        provider,
+                        project_context=state.get("coding_project_context") or None,
+                    )
+                elif agent == "shell":
+                    reply, tu = await asyncio.to_thread(
+                        run_shell_agent,
+                        goal_run,
+                        wrapped,
+                        api_key,
+                        provider,
+                        chat_id=state.get("chat_id"),
+                        run_id=run_id,
+                    )
+                elif agent == "finance":
+                    reply, tu = await asyncio.to_thread(
+                        run_finance_agent, goal_run, wrapped, api_key, provider
+                    )
+                elif agent == "google":
+                    reply, tu = await asyncio.to_thread(
+                        run_google_workspace_agent,
+                        goal_run,
+                        state.get("google_session_id"),
+                        wrapped,
+                        api_key,
+                        provider,
+                        state.get("chat_id"),
+                    )
+                else:
+                    finish_child(run_id, child_id, "skipped")
+                    ast = record_error(ast, f"unknown agent: {agent}")
+                    continue
         except Exception as e:
             reply = f"**{agent}** failed: {e}"
             tu = None
             ast = record_error(ast, str(e))
-        finish_child(run_id, child_id, "error" if tu is None and "failed:" in (reply or "").lower() else "complete")
-
-        ast = record_action_signature(ast, f"{agent}|{base_goal[:80]}")
-        failed = bool(tu is None and "failed:" in (reply or "").lower()) or (
-            isinstance(tu, dict) and "failed" in str(tu.get("result") or "").lower()
+        reply_l = (reply or "").lower()
+        pending = bool(isinstance(tu, dict) and tu.get("pending_approval")) or "awaiting user confirmation" in reply_l
+        tool_ok = True
+        if isinstance(tu, dict):
+            result = tu.get("result")
+            if isinstance(result, dict) and result.get("ok") is False:
+                tool_ok = False
+            elif isinstance(result, str) and ("failed" in result.lower() or '"ok": false' in result.lower()):
+                tool_ok = False
+        failed = (
+            (tu is None and ("failed:" in reply_l or "is not armed" in reply_l))
+            or not tool_ok
         )
+        if pending:
+            finish_child(run_id, child_id, "blocked")
+        else:
+            finish_child(run_id, child_id, "error" if failed else "complete")
+
+        ast = record_action_signature(ast, f"{agent}|{idx}|{base_goal[:80]}")
+        plan_index = item.get("index")
+        if not isinstance(plan_index, int):
+            plan_index = idx
         ast = mark_plan_step(
             ast,
-            idx,
-            "error" if failed else "complete",
+            plan_index,
+            "error" if failed else ("blocked" if pending else "complete"),
             finding=(reply or "")[:400],
         )
 

@@ -12,6 +12,7 @@ import {
   deleteChat,
   sendMessageStream,
   sendMessageWithFiles,
+  chatbotResponse,
   appendChatLog,
   getChatsStoragePath,
   setChatsStoragePath,
@@ -43,6 +44,8 @@ import {
   searchChats,
   compactChat,
   getChatHandoff,
+  getChatRecap,
+  reactToReply,
   listBookmarks,
   addBookmark,
   deleteBookmark,
@@ -152,7 +155,7 @@ function readCodingLayoutWidths() {
 
 /** Embedded charts from the coding agent sandbox use data:image/... URLs. */
 function markdownUrlTransform(url) {
-  if (typeof url === 'string' && url.startsWith('data:image/')) return url
+  if (typeof url === 'string' && /^data:image\/(png|jpe?g|gif|webp);/i.test(url)) return url
   return defaultUrlTransform(url)
 }
 
@@ -868,6 +871,7 @@ function App() {
   const [queueHeld, setQueueHeld] = useState(false)
   const [chatSearchQ, setChatSearchQ] = useState('')
   const [chatSearchHits, setChatSearchHits] = useState([])
+  const chatSearchTimerRef = useRef(null)
   const [bookmarks, setBookmarks] = useState([])
   const [usageStats, setUsageStats] = useState(null)
   const [customAgents, setCustomAgents] = useState([])
@@ -1732,17 +1736,17 @@ function App() {
           setFilePreview({ relPath, title, kind: 'image', imageUrl, body: '', loading: false, error: null, source })
           return
         }
-        let body = ''
+        let body = null
         let source = null
         if (h) {
-          body = (await readProjectFileText(h, relPath)) || ''
-          if (body) source = 'handle'
+          body = await readProjectFileText(h, relPath)
+          if (body != null) source = 'handle'
         }
-        if (!body) {
-          body = (await getPreviewFileText(workspaceLocalLabel, relPath)) || ''
-          if (body) source = 'cache'
+        if (body == null) {
+          body = await getPreviewFileText(workspaceLocalLabel, relPath)
+          if (body != null) source = 'cache'
         }
-        if (!body) {
+        if (body == null) {
           setFilePreview({
             relPath,
             title,
@@ -2256,6 +2260,71 @@ function App() {
       refreshChatList()
       return
     }
+    if (/^\/recap\s*$/i.test(raw) && filesToSend.length === 0) {
+      setInput('')
+      appendMessage('/recap', true)
+      try {
+        await appendChatLog('user', '/recap')
+      } catch {
+        /* ignore */
+      }
+      try {
+        const cid = currentChatId || (await getCurrentChatId())
+        const data = await getChatRecap(cid)
+        const body = data?.markdown || 'No recap.'
+        appendMessage(body, false)
+        await appendChatLog('assistant', body)
+      } catch (e) {
+        appendMessage(e?.message || 'Recap failed.', false)
+      }
+      refreshChatList()
+      return
+    }
+    if (/^\/(?:btw|side)\s+/i.test(raw) && filesToSend.length === 0) {
+      const q = raw.replace(/^\/(?:btw|side)\s+/i, '').trim()
+      setInput('')
+      appendMessage(raw, true)
+      try {
+        await appendChatLog('user', raw)
+      } catch {
+        /* ignore */
+      }
+      try {
+        const reply = await chatbotResponse(
+          `Side question (do not start an agent plan; answer only):\n${q}`,
+        )
+        const body = `**Side note** (main task unchanged)\n\n${reply || '(no reply)'}`
+        appendMessage(body, false)
+        await appendChatLog('assistant', body)
+      } catch (e) {
+        appendMessage(e?.message || 'Side question failed.', false)
+      }
+      refreshChatList()
+      return
+    }
+    if (/^\/search-memory\s+/i.test(raw) && filesToSend.length === 0) {
+      const q = raw.replace(/^\/search-memory\s+/i, '').trim()
+      setInput('')
+      appendMessage(raw, true)
+      try {
+        await appendChatLog('user', raw)
+      } catch {
+        /* ignore */
+      }
+      try {
+        const data = await searchChats(q)
+        const hits = data?.hits || []
+        const body = hits.length
+          ? ['# Memory search', '', ...hits.map((h) => `- **${h.title || h.id}** — ${h.snippet || ''}`)].join('\n')
+          : 'No matching chats.'
+        appendMessage(body, false)
+        await appendChatLog('assistant', body)
+      } catch (e) {
+        appendMessage(e?.message || 'Search failed.', false)
+      }
+      refreshChatList()
+      return
+    }
     if (/^\/introduce\/?\s*$/i.test(raw) && filesToSend.length === 0) {
       setInput('')
       setFileMention(null)
@@ -2321,7 +2390,7 @@ function App() {
     screenshotPendingRef.current = {}
 
     try {
-      await appendChatLog('user', displayText)
+      await appendChatLog('user', displayText, currentChatId)
     } catch {
       /* ignore */
     }
@@ -2344,7 +2413,7 @@ function App() {
           activeAgentId || null,
         )
         appendMessage(reply, false)
-        await appendChatLog('assistant', reply)
+        await appendChatLog('assistant', reply, chatId)
       } else {
         const formatAgentStep = (d) => {
           const n = d.step
@@ -2432,7 +2501,7 @@ function App() {
           refreshPendingApprovals()
         }
         appendMessage(reply || '', false)
-        await appendChatLog('assistant', reply || '')
+        await appendChatLog('assistant', reply || '', chatId)
         refreshControlPlane()
       }
       setLiveReply(null)
@@ -2447,7 +2516,7 @@ function App() {
         : err?.message || 'Sorry, something went wrong. Please try again.'
       appendMessage(msg, false)
       try {
-        await appendChatLog('assistant', msg)
+        await appendChatLog('assistant', msg, currentChatId)
       } catch {
         /* ignore */
       }
@@ -2558,6 +2627,34 @@ function App() {
                 </div>
                 <div className="msg-bot-actions">
                   <CopyResponseButton text={msg.content} />
+                  <button
+                    type="button"
+                    className="msg-pin-btn"
+                    title="This reply helped"
+                    onClick={async () => {
+                      try {
+                        await reactToReply(currentChatId || '', 'up', (msg.content || '').slice(0, 240))
+                      } catch {
+                        /* ignore */
+                      }
+                    }}
+                  >
+                    👍
+                  </button>
+                  <button
+                    type="button"
+                    className="msg-pin-btn"
+                    title="This reply missed"
+                    onClick={async () => {
+                      try {
+                        await reactToReply(currentChatId || '', 'down', (msg.content || '').slice(0, 240))
+                      } catch {
+                        /* ignore */
+                      }
+                    }}
+                  >
+                    👎
+                  </button>
                   <button
                     type="button"
                     className="msg-pin-btn"
@@ -2962,19 +3059,22 @@ function App() {
                   className="navbar-chats-search"
                   placeholder="Search chats…"
                   value={chatSearchQ}
-                  onChange={async (e) => {
+                  onChange={(e) => {
                     const v = e.target.value
                     setChatSearchQ(v)
+                    if (chatSearchTimerRef.current) clearTimeout(chatSearchTimerRef.current)
                     if (!v.trim()) {
                       setChatSearchHits([])
                       return
                     }
-                    try {
-                      const data = await searchChats(v.trim())
-                      setChatSearchHits(Array.isArray(data?.hits) ? data.hits : [])
-                    } catch {
-                      setChatSearchHits([])
-                    }
+                    chatSearchTimerRef.current = setTimeout(async () => {
+                      try {
+                        const data = await searchChats(v.trim())
+                        setChatSearchHits(Array.isArray(data?.hits) ? data.hits : [])
+                      } catch {
+                        setChatSearchHits([])
+                      }
+                    }, 250)
                   }}
                   aria-label="Search chats"
                 />
@@ -3018,7 +3118,7 @@ function App() {
                           }}
                         >
                           {CHAT_ICON}
-                          <span className="chat-history-title" title={escapeHtml(chat.title)}>
+                          <span className="chat-history-title" title={chat.title}>
                             {chat.title}
                           </span>
                         </button>

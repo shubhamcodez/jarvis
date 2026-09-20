@@ -19,7 +19,7 @@ from typing import Any
 import httpx
 from dotenv import load_dotenv
 
-# Repo root: backend/auth/google_oauth.py -> parents[2] == Socrates/
+# Repo root: backend/auth/google_oauth.py -> parents[2]
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _dotenv_override = (
     os.environ.get("ADA_DOTENV_PATH") or os.environ.get("JARVIS_DOTENV_PATH") or ""
@@ -27,8 +27,14 @@ _dotenv_override = (
 if _dotenv_override:
     load_dotenv(Path(_dotenv_override).expanduser(), encoding="utf-8")
 else:
-    # Same file as backend/config.py uses; load again so OAuth works even if import order changes.
-    load_dotenv(_REPO_ROOT / ".env", encoding="utf-8")
+    try:
+        from config import data_root
+
+        load_dotenv(data_root() / ".env", encoding="utf-8")
+        if data_root() != _REPO_ROOT:
+            load_dotenv(_REPO_ROOT / ".env", encoding="utf-8", override=False)
+    except Exception:
+        load_dotenv(_REPO_ROOT / ".env", encoding="utf-8")
 
 _DEFAULT_STORE_PATH = _REPO_ROOT / ".secrets" / "google-oauth-store.json"
 _LOCK = threading.Lock()
@@ -51,21 +57,24 @@ def _store_path() -> Path:
     if raw:
         return Path(raw).expanduser()
     if _is_packaged():
-        appdata = os.environ.get("ADA_DATA_DIR") or os.environ.get("APPDATA")
-        if appdata:
-            p = Path(appdata)
-            if p.name.lower() != "ada":
-                p = p / "Ada"
-            return p / ".secrets" / "google-oauth-store.json"
+        try:
+            from config import data_root
+
+            return data_root() / ".secrets" / "google-oauth-store.json"
+        except Exception:
+            appdata = os.environ.get("ADA_DATA_DIR") or os.environ.get("APPDATA")
+            if appdata:
+                return Path(appdata) / ".secrets" / "google-oauth-store.json"
     return _DEFAULT_STORE_PATH
 
 
 def _cookie_secure() -> bool:
-    return (os.environ.get("GOOGLE_OAUTH_COOKIE_SECURE") or "").strip().lower() in (
-        "1",
-        "true",
-        "yes",
-    )
+    env = (os.environ.get("GOOGLE_OAUTH_COOKIE_SECURE") or "").strip().lower()
+    if env in ("1", "true", "yes", "on"):
+        return True
+    if env in ("0", "false", "no", "off"):
+        return False
+    return _redirect_uri().lower().startswith("https://")
 
 
 def _frontend_base_url() -> str:
@@ -108,6 +117,18 @@ def _scopes() -> str:
         "https://www.googleapis.com/auth/gmail.modify "
         "https://www.googleapis.com/auth/gmail.send"
     )
+
+
+def _safe_next_path(next_path: str | None) -> str:
+    """Allow only a same-origin relative path: /foo, not //evil, /\\evil, or CRLF."""
+    raw = (next_path or "/").strip() or "/"
+    if "\r" in raw or "\n" in raw or "\\" in raw:
+        return "/"
+    if not raw.startswith("/") or raw.startswith("//"):
+        return "/"
+    if "://" in raw:
+        return "/"
+    return raw
 
 
 def oauth_is_configured() -> bool:
@@ -167,13 +188,20 @@ def _load_store() -> dict[str, Any]:
         data.setdefault("users", {})
         return data
     except Exception:
+        # Do not overwrite a corrupt-but-maybe-recoverable file with {}.
         return _empty_store()
 
 
 def _save_store(data: dict[str, Any]) -> None:
     p = _store_path()
     p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    tmp = p.with_suffix(".tmp")
+    tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    tmp.replace(p)
+    try:
+        os.chmod(p, 0o600)
+    except OSError:
+        pass
 
 
 def _cleanup_expired(data: dict[str, Any]) -> None:
@@ -185,7 +213,7 @@ def _cleanup_expired(data: dict[str, Any]) -> None:
         if now - ts > _PENDING_TTL_SEC:
             pending.pop(key, None)
     for sid, row in list(sessions.items()):
-        ts = int((row or {}).get("created_at") or 0)
+        ts = int((row or {}).get("last_used") or (row or {}).get("created_at") or 0)
         if now - ts > _SESSION_TTL_SEC:
             sessions.pop(sid, None)
 
@@ -210,7 +238,7 @@ def create_login_url(next_path: str | None = None) -> str:
         data["pending"][state] = {
             "code_verifier": verifier,
             "created_at": _now(),
-            "next_path": (next_path or "/").strip() or "/",
+            "next_path": _safe_next_path(next_path),
         }
         _save_store(data)
 
@@ -236,8 +264,12 @@ def exchange_code_and_create_session(code: str, state: str) -> tuple[str, str]:
     with _LOCK:
         data = _load_store()
         _cleanup_expired(data)
-        pending = (data.get("pending") or {}).pop(state, None)
-        _save_store(data)
+        pending = (data.get("pending") or {}).get(state)
+        if pending:
+            pending = dict(pending)
+            pending["in_flight"] = True
+            data["pending"][state] = pending
+            _save_store(data)
     if not pending:
         raise ValueError("Invalid or expired OAuth state.")
 
@@ -301,14 +333,14 @@ def exchange_code_and_create_session(code: str, state: str) -> tuple[str, str]:
                 "scope": token_data.get("scope"),
                 "token_type": token_data.get("token_type"),
                 "expires_in": token_data.get("expires_in"),
-                "expires_at": exp_at,
-                "id_token": token_data.get("id_token"),
+                "expires_at": exp_at if exp_at is not None else _now() + 3500,
             },
         }
-        sessions[sid] = {"sub": sub, "created_at": _now()}
+        sessions[sid] = {"sub": sub, "created_at": _now(), "last_used": _now()}
+        (data.get("pending") or {}).pop(state, None)
         _save_store(data)
 
-    next_path = str(pending.get("next_path") or "/").strip() or "/"
+    next_path = _safe_next_path(str(pending.get("next_path") or "/"))
     return sid, next_path
 
 
@@ -322,6 +354,23 @@ def _access_token_stale(tokens: dict[str, Any]) -> bool:
         return True
 
 
+def _refresh_tokens_http(refresh_token: str) -> dict[str, Any]:
+    if not oauth_is_configured():
+        raise ValueError("OAuth client is not configured on the server.")
+    resp = httpx.post(
+        "https://oauth2.googleapis.com/token",
+        data={
+            "client_id": _client_id(),
+            "client_secret": _client_secret(),
+            "refresh_token": refresh_token,
+            "grant_type": "refresh_token",
+        },
+        timeout=20.0,
+    )
+    resp.raise_for_status()
+    return resp.json()
+
+
 def _refresh_tokens_for_user(data: dict[str, Any], sub: str) -> str:
     """Refresh Google access token; mutates data['users'][sub]['tokens']. Returns new access_token."""
     users = data.setdefault("users", {})
@@ -330,20 +379,7 @@ def _refresh_tokens_for_user(data: dict[str, Any], sub: str) -> str:
     rt = (tok.get("refresh_token") or "").strip()
     if not rt:
         raise ValueError("Missing refresh token. Sign in with Google again.")
-    if not oauth_is_configured():
-        raise ValueError("OAuth client is not configured on the server.")
-    resp = httpx.post(
-        "https://oauth2.googleapis.com/token",
-        data={
-            "client_id": _client_id(),
-            "client_secret": _client_secret(),
-            "refresh_token": rt,
-            "grant_type": "refresh_token",
-        },
-        timeout=20.0,
-    )
-    resp.raise_for_status()
-    body = resp.json()
+    body = _refresh_tokens_http(rt)
     at = (body.get("access_token") or "").strip()
     if not at:
         raise ValueError("Token refresh did not return access_token.")
@@ -359,7 +395,7 @@ def _refresh_tokens_for_user(data: dict[str, Any], sub: str) -> str:
         "access_token": at,
         "refresh_token": new_refresh,
         "expires_in": body.get("expires_in"),
-        "expires_at": exp_at,
+        "expires_at": exp_at if exp_at is not None else _now() + 3500,
         "scope": body.get("scope") or tok.get("scope"),
         "token_type": body.get("token_type") or tok.get("token_type"),
     }
@@ -375,6 +411,8 @@ def get_valid_access_token_for_session(session_id: str | None) -> tuple[str | No
     """
     if not session_id:
         return None, "Not signed in."
+    refresh_needed = False
+    refresh_sub = ""
     with _LOCK:
         data = _load_store()
         _cleanup_expired(data)
@@ -384,17 +422,54 @@ def get_valid_access_token_for_session(session_id: str | None) -> tuple[str | No
         if not row:
             _save_store(data)
             return None, "Session expired. Sign in again."
+        row["last_used"] = _now()
         sub = row.get("sub")
         user = users.get(sub) or {}
         tok = user.get("tokens") or {}
         access = (tok.get("access_token") or "").strip()
         if (not access or _access_token_stale(tok)) and (tok.get("refresh_token") or "").strip():
-            try:
-                access = _refresh_tokens_for_user(data, str(sub))
-            except Exception as e:
-                _save_store(data)
-                return None, str(e)
-        _save_store(data)
+            refresh_needed = True
+            refresh_sub = str(sub)
+        else:
+            _save_store(data)
+    if refresh_needed:
+        with _LOCK:
+            data = _load_store()
+            tok = ((data.get("users") or {}).get(refresh_sub) or {}).get("tokens") or {}
+            rt = (tok.get("refresh_token") or "").strip()
+        if not rt:
+            return None, "Missing refresh token. Sign in with Google again."
+        try:
+            body = _refresh_tokens_http(rt)
+            at = (body.get("access_token") or "").strip()
+            if not at:
+                raise ValueError("Token refresh did not return access_token.")
+        except Exception as e:
+            return None, str(e)
+        with _LOCK:
+            data = _load_store()
+            users = data.setdefault("users", {})
+            user = users.get(refresh_sub) or {}
+            tok = dict(user.get("tokens") or {})
+            exp_at = None
+            if body.get("expires_in") is not None:
+                try:
+                    exp_at = _now() + int(body["expires_in"])
+                except (TypeError, ValueError):
+                    pass
+            user["tokens"] = {
+                **tok,
+                "access_token": at,
+                "refresh_token": (body.get("refresh_token") or "").strip() or rt,
+                "expires_in": body.get("expires_in"),
+                "expires_at": exp_at if exp_at is not None else _now() + 3500,
+                "scope": body.get("scope") or tok.get("scope"),
+                "token_type": body.get("token_type") or tok.get("token_type"),
+            }
+            user["updated_at"] = _now()
+            users[refresh_sub] = user
+            _save_store(data)
+            access = at
     if not access:
         return None, "No access token. Sign in with Google again."
     return access, None
@@ -471,14 +546,30 @@ def disconnect_session(session_id: str | None) -> None:
 
 def callback_success_redirect(next_path: str) -> str:
     base = _frontend_base_url()
-    safe_next = next_path if next_path.startswith("/") else "/"
+    safe_next = _safe_next_path(next_path)
     sep = "&" if "?" in safe_next else "?"
     return f"{base}{safe_next}{sep}google_connected=1"
 
 
+_OAUTH_ERROR_CODES = {
+    "missing_code": "missing_code",
+    "invalid or expired oauth state": "invalid_state",
+    "oauth verifier missing": "invalid_state",
+    "token": "token_exchange_failed",
+}
+
+
 def callback_error_redirect(message: str) -> str:
     base = _frontend_base_url()
-    return f"{base}/?google_auth_error={quote_plus(message)}"
+    raw = (message or "oauth_failed").strip().lower()
+    code = "oauth_failed"
+    for needle, mapped in _OAUTH_ERROR_CODES.items():
+        if needle in raw:
+            code = mapped
+            break
+    if "not configured" in raw:
+        code = "not_configured"
+    return f"{base}/?google_auth_error={quote_plus(code)}"
 
 
 def cookie_secure() -> bool:

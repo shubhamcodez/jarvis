@@ -63,16 +63,18 @@ def aggregate_trace_stats(trace_limit: int = 1000) -> dict[str, Any]:
         d = t.get("duration_sec")
         if d is not None:
             by_provider[p]["duration_sum"] += float(d)
+            by_provider[p]["duration_n"] = by_provider[p].get("duration_n", 0) + 1
     out = {}
     for p, v in by_provider.items():
         n = v["total"]
+        dn = v.get("duration_n") or 0
         out[p] = {
             "success_rate": v["success"] / n if n else 0,
             "total_runs": n,
             "token_input_total": v["token_in"],
             "token_output_total": v["token_out"],
             "error_count": v["errors"],
-            "avg_duration_sec": v["duration_sum"] / n if n else None,
+            "avg_duration_sec": v["duration_sum"] / dn if dn else None,
         }
     return out
 

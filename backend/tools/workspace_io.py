@@ -11,15 +11,22 @@ from tools.project_repository import build_repository_snapshot
 _SKIP_DIR_NAMES = frozenset(
     {
         ".git",
+        ".svn",
+        ".hg",
         "node_modules",
         "__pycache__",
         ".venv",
         "venv",
+        ".mypy_cache",
+        ".pytest_cache",
+        ".tox",
         "dist",
         "build",
         ".next",
         "target",
         ".idea",
+        ".vscode",
+        "coverage",
     }
 )
 

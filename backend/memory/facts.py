@@ -109,28 +109,22 @@ def delete_fact(fact_id: str) -> bool:
 def retrieve_facts(query: str, *, limit: int = 8) -> list[dict[str, Any]]:
     q = (query or "").strip().lower()
     words = set(_WORD.findall(q)) if q else set()
+    if not words:
+        return []
     now = time.time()
-    touched: list[dict[str, Any]] = []
     with _LOCK:
         items = _load()
         scored: list[tuple[float, dict[str, Any]]] = []
         for item in items:
             text = (item.get("text") or "").lower()
             key = (item.get("key") or "").lower()
-            overlap = len(words & set(_WORD.findall(text + " " + key))) if words else 0
-            base = _score(item, now)
-            bonus = 2.5 * overlap if words else 0.0
-            if words and overlap == 0 and base < 0.35:
+            overlap = len(words & set(_WORD.findall(text + " " + key)))
+            if overlap == 0:
                 continue
-            scored.append((base + bonus, item))
+            base = _score(item, now)
+            scored.append((base + 2.5 * overlap, item))
         scored.sort(key=lambda x: x[0], reverse=True)
-        for _, item in scored[: max(1, min(20, int(limit)))]:
-            item["uses"] = int(item.get("uses") or 0) + 1
-            item["last_used"] = now
-            touched.append(dict(item))
-        if touched:
-            _save(items)
-    return touched
+        return [dict(item) for _, item in scored[: max(1, min(20, int(limit)))]]
 
 
 def format_facts_for_prompt(items: list[dict[str, Any]]) -> str:

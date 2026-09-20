@@ -8,28 +8,39 @@ from .chat_log import (
     set_current_chat,
 )
 from .ingest import ingest_chat
-from .prompt_assembly import inject_memory_into_user_message
+from .prompt_assembly import assemble_turn_context, inject_memory_into_user_message
 from .retrieval import run_retrieval_pipeline
+from .writeback import schedule_write_back, write_back_turn
 from .schemas import Chunk, SearchResult, WorkingState
 from .vector_store import VectorStore
 from .facts import add_fact, list_facts, retrieve_facts
 from .identity import format_identity_for_prompt, read_identity, write_identity
+import threading
 
 # Single in-memory store for retrieval; populate via ingest or write-back
 _memory_store: VectorStore | None = None
+_STORE_LOCK = threading.Lock()
 
 
 def get_memory_store() -> VectorStore:
-    """Return the global vector store for memory retrieval (lazy init)."""
+    """Return the global vector store (loads persisted episodic memory once)."""
     global _memory_store
     if _memory_store is None:
-        _memory_store = VectorStore()
+        with _STORE_LOCK:
+            if _memory_store is None:
+                store = VectorStore()
+                try:
+                    store.load()
+                except Exception:
+                    pass
+                _memory_store = store
     return _memory_store
 
 
 __all__ = [
     "add_fact",
     "append_chat_log",
+    "assemble_turn_context",
     "Chunk",
     "clear_current_chat",
     "format_identity_for_prompt",
@@ -43,6 +54,8 @@ __all__ = [
     "read_identity",
     "retrieve_facts",
     "run_retrieval_pipeline",
+    "schedule_write_back",
+    "write_back_turn",
     "SearchResult",
     "set_current_chat",
     "WorkingState",

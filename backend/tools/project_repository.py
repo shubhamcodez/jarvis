@@ -279,7 +279,7 @@ def build_repository_snapshot(path_str: str) -> str:
             continue
         abs_p = root / rp
         try:
-            if not abs_p.is_file():
+            if abs_p.is_symlink() or not abs_p.is_file():
                 continue
         except OSError:
             continue

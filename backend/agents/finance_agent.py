@@ -118,7 +118,11 @@ def run_finance_agent(
     if not tickers:
         tickers = _tickers_from_text(goal)
     if not tickers:
-        tickers = ["SPY"]
+        return (
+            "I need a ticker symbol to pull market data (for example AAPL or SPY). "
+            "This request did not name one.",
+            {"name": "finance", "input": goal[:500], "result": "no_ticker"},
+        )
 
     period = str(plan.get("history_period") or "6mo").strip()
     interval = str(plan.get("history_interval") or "1d").strip()

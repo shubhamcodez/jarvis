@@ -176,7 +176,7 @@ export function CustomAgentEditor({ agentId, onClose, onChanged, onDeleted }) {
                 value={agent.emoji || ''}
                 maxLength={8}
                 onChange={(e) => setAgent({ ...agent, emoji: e.target.value })}
-                onBlur={() => saveProfile({ emoji: agent.emoji })}
+                onBlur={(e) => saveProfile({ emoji: e.target.value })}
               />
             </label>
             <label>
@@ -184,7 +184,7 @@ export function CustomAgentEditor({ agentId, onClose, onChanged, onDeleted }) {
               <input
                 value={agent.name || ''}
                 onChange={(e) => setAgent({ ...agent, name: e.target.value })}
-                onBlur={() => saveProfile({ name: agent.name })}
+                onBlur={(e) => saveProfile({ name: e.target.value })}
               />
             </label>
             <label>
@@ -193,7 +193,7 @@ export function CustomAgentEditor({ agentId, onClose, onChanged, onDeleted }) {
                 value={agent.title || ''}
                 placeholder="e.g. Expense manager"
                 onChange={(e) => setAgent({ ...agent, title: e.target.value })}
-                onBlur={() => saveProfile({ title: agent.title })}
+                onBlur={(e) => saveProfile({ title: e.target.value })}
               />
             </label>
             <label>
@@ -203,7 +203,7 @@ export function CustomAgentEditor({ agentId, onClose, onChanged, onDeleted }) {
                 value={agent.description || ''}
                 placeholder="One job, working style, and approval boundary."
                 onChange={(e) => setAgent({ ...agent, description: e.target.value })}
-                onBlur={() => saveProfile({ description: agent.description })}
+                onBlur={(e) => saveProfile({ description: e.target.value })}
               />
             </label>
             <label>
@@ -212,7 +212,7 @@ export function CustomAgentEditor({ agentId, onClose, onChanged, onDeleted }) {
                 rows={3}
                 value={agent.approval_boundary || ''}
                 onChange={(e) => setAgent({ ...agent, approval_boundary: e.target.value })}
-                onBlur={() => saveProfile({ approval_boundary: agent.approval_boundary })}
+                onBlur={(e) => saveProfile({ approval_boundary: e.target.value })}
               />
             </label>
             <div className="agent-form__checks">

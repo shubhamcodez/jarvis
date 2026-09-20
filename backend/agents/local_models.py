@@ -509,10 +509,10 @@ def load_model(model_id: str) -> dict[str, Any]:
         import torch
         from transformers import AutoModelForCausalLM, AutoTokenizer
 
-        tok = AutoTokenizer.from_pretrained(path, trust_remote_code=True)
+        tok = AutoTokenizer.from_pretrained(path, trust_remote_code=False)
         model = AutoModelForCausalLM.from_pretrained(
             path,
-            trust_remote_code=True,
+            trust_remote_code=False,
             torch_dtype=torch.float32,
             low_cpu_mem_usage=True,
         )

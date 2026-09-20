@@ -162,7 +162,7 @@ RULES:
     system += coord_rule + """
 
 - Reply with ONLY a JSON object, no markdown or other text. Include "thought": a 1–2 sentence explanation. Format:
-{"action": "click"|"double_click"|"right_click"|"type"|"press"|"scroll"|"hotkey"|"done", "x": number or null, "y": number or null, "text": string or null, "key": string or null, "scroll_amount": number or null, "keys": ["ctrl","t"] or null, "description": "what you're doing", "thought": "what you see and why you're doing this"}
+{"action": "click"|"double_click"|"right_click"|"type"|"press"|"scroll"|"hotkey"|"wait"|"drag"|"move"|"done", "x": number or null, "y": number or null, "x2": number or null, "y2": number or null, "text": string or null, "key": string or null, "scroll_amount": number or null, "seconds": number or null, "keys": ["ctrl","t"] or null, "description": "what you're doing", "thought": "what you see and why you're doing this"}
 - "press": one key name in "key" (e.g. "enter", "tab", "esc"). Omit x/y unless also clicking.
 - "hotkey": set "keys" to modifiers+key (e.g. ["ctrl","t"], ["command","t"], ["alt","f4"]). Omit x/y.
 - Use "done" ONLY when the **full** user goal is satisfied. For "done", set thought to a brief summary.

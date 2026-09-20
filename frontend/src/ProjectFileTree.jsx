@@ -14,6 +14,7 @@ function buildTree(rootLabel, fileRelPaths) {
       const isFile = i === parts.length - 1
       acc.push(part)
       const subPath = acc.join('/')
+      if (!node.children) node.children = []
       let child = node.children.find((c) => c.name === part)
       if (!child) {
         child = {
@@ -23,6 +24,9 @@ function buildTree(rootLabel, fileRelPaths) {
           children: isFile ? undefined : [],
         }
         node.children.push(child)
+      } else if (!isFile && child.kind === 'file') {
+        child.kind = 'dir'
+        child.children = child.children || []
       }
       node = child
     }
@@ -109,7 +113,7 @@ export function ProjectFileTree({ rootLabel, relPaths, onFileOpen }) {
       if (c.kind === 'dir') s.add(c.path)
     }
     setExpanded(s)
-  }, [tree, rootLabel, relPaths])
+  }, [rootLabel])
 
   const toggle = (path) => {
     setExpanded((prev) => {

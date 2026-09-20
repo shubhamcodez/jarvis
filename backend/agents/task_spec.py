@@ -51,7 +51,9 @@ def build_task_spec(
         constraints.append("Do not present market data as financial advice")
         success.append("Figures come from fetched tool data, not invented prices")
     if "coding" in agent_names:
-        success.append("Sandbox code ran or workspace proposals were produced")
+        success.append("Tests passed, sandbox ran, or workspace proposals were produced")
+        if workspace_root:
+            success.append("Repo edits stayed in the overlay/worktree until apply")
     if not success:
         success.append("User request answered or a clear blocker is reported")
 
@@ -62,7 +64,7 @@ def build_task_spec(
         "success_criteria": success,
         "risk": risk,
         "budget": {
-            "max_steps": 20,
+            "max_steps": 25,
             "max_specialists": 5,
         },
         "seed_agents": [{"agent": a.get("agent"), "goal": a.get("goal")} for a in agents],

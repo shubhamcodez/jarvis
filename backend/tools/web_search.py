@@ -38,7 +38,7 @@ def _effective_max_results(requested: int) -> int:
     except ValueError:
         env_n = _DEFAULT_RESULTS
     env_n = max(5, min(env_n, _MAX_RESULTS_CAP))
-    n = requested if requested != _DEFAULT_RESULTS else env_n
+    n = min(requested, env_n)
     return max(1, min(n, _MAX_RESULTS_CAP))
 
 

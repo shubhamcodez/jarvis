@@ -68,7 +68,9 @@ def save_state(state: dict[str, Any]) -> None:
         return
     state["updated_at"] = time.time()
     path = _path_for(chat_id)
-    path.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp.replace(path)
 
 
 def begin_run(
@@ -86,9 +88,15 @@ def begin_run(
     spec_budget = (task_spec or {}).get("budget") or {}
     budget.update({k: spec_budget[k] for k in spec_budget})
     budget["steps_used"] = 0
+    budget["replans"] = 0
     st["budget"] = budget
     st["errors"] = []
     st["action_signatures"] = []
+    st["findings"] = []
+    st["tool_results"] = []
+    st["artifacts"] = []
+    st["unresolved"] = []
+    st["hitl"] = []
     plan = []
     for i, item in enumerate(seed_agents or task_spec.get("seed_agents") or []):
         plan.append(

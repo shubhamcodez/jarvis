@@ -161,6 +161,8 @@ def run_google_workspace_agent(
 
         out = maybe_gate_google(op, args, chat_id=chat_id, execute=_exec)
         results.append({"op": op, "args": args, "result": out})
+        if isinstance(out, dict) and (out.get("pending_approval") or out.get("blocked")):
+            break
         if on_step:
             on_step(
                 step_n,

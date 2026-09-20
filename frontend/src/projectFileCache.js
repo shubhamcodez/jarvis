@@ -112,7 +112,7 @@ export async function getPreviewFileText(rootLabel, relPath) {
     getReq.onsuccess = () => {
       db.close()
       const v = getReq.result
-      resolve(typeof v === 'string' && v.length ? v : null)
+      resolve(typeof v === 'string' ? v : null)
     }
     getReq.onerror = () => {
       db.close()

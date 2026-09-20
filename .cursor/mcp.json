@@ -1,14 +1,31 @@
 {
   "mcpServers": {
+    "gmail": {
+      "url": "https://gmailmcp.googleapis.com/mcp/v1"
+    },
     "google-calendar": {
-      "command": "npx",
-      "args": [
-        "-y",
-        "@cocal/google-calendar-mcp"
-      ],
-      "env": {
-        "GOOGLE_OAUTH_CREDENTIALS": "E:/Socrates/.secrets/google-oauth.keys.json"
-      }
+      "url": "https://calendarmcp.googleapis.com/mcp/v1"
+    },
+    "google-drive": {
+      "url": "https://drivemcp.googleapis.com/mcp/v1"
+    },
+    "google-docs": {
+      "url": "https://docsmcp.googleapis.com/mcp/v1"
+    },
+    "google-sheets": {
+      "url": "https://sheetsmcp.googleapis.com/mcp/v1"
+    },
+    "google-slides": {
+      "url": "https://slidesmcp.googleapis.com/mcp/v1"
+    },
+    "google-chat": {
+      "url": "https://chatmcp.googleapis.com/mcp/v1"
+    },
+    "google-people": {
+      "url": "https://people.googleapis.com/mcp/v1"
+    },
+    "canva": {
+      "url": "https://mcp.canva.com/mcp"
     }
   }
 }

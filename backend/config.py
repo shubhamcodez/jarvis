@@ -2,8 +2,11 @@
 from __future__ import annotations
 
 import copy
+import logging
 import os
 import sys
+import threading
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -52,11 +55,6 @@ def _config_yaml_path() -> Path:
     packaged = data_root() / "ada-config.yaml"
     bundled = _BACKEND_ROOT / "ada-config.yaml"
     if is_packaged():
-        if not packaged.exists() and bundled.exists():
-            try:
-                packaged.write_text(bundled.read_text(encoding="utf-8"), encoding="utf-8")
-            except OSError:
-                return bundled
         return packaged
     return bundled
 
@@ -74,8 +72,16 @@ _LEGACY_GREP_ROOT_FILE = _REPO_ROOT / "jarvis-grep-root.txt"
 _DEFAULTS: dict[str, Any] = {
     "llm_provider": "openai",
     "chat": {
-        "history_limit": 300,
-        "memory_query_recent_turns": 32,
+        "history_limit": 80,
+        "memory_query_recent_turns": 16,
+    },
+    "context": {
+        "system_stable_tokens": 1800,
+        "system_dynamic_tokens": 2400,
+        "history_tokens": 6000,
+        "memory_tokens": 1400,
+        "facts_tokens": 500,
+        "identity_tokens": 900,
     },
     "grep": {
         "default_root": None,
@@ -102,11 +108,31 @@ _DEFAULTS: dict[str, Any] = {
 }
 
 
+_LOG = logging.getLogger("ada.config")
+_WRITE_LOCK = threading.Lock()
+
+
+def _seed_packaged_config() -> None:
+    if not is_packaged() or CONFIG_YAML.exists():
+        return
+    try:
+        CONFIG_YAML.parent.mkdir(parents=True, exist_ok=True)
+        CONFIG_YAML.write_text(
+            yaml.safe_dump(_DEFAULTS, default_flow_style=False, sort_keys=False, allow_unicode=True),
+            encoding="utf-8",
+        )
+    except OSError:
+        pass
+
+
+_seed_packaged_config()
+
+
 def _deep_merge(base: dict[str, Any], over: dict[str, Any]) -> dict[str, Any]:
     out = dict(base)
     for k, v in over.items():
         if k in out and isinstance(out[k], dict) and isinstance(v, dict):
-            out[k] = {**out[k], **v}
+            out[k] = _deep_merge(out[k], v)
         else:
             out[k] = v
     return out
@@ -124,8 +150,13 @@ def _load_raw_user_config() -> dict[str, Any]:
     """YAML file if present; otherwise legacy .txt files at repo root."""
     yml = _yaml_to_load()
     if yml is not None:
-        with yml.open(encoding="utf-8") as f:
-            return yaml.safe_load(f) or {}
+        try:
+            with yml.open(encoding="utf-8") as f:
+                raw = yaml.safe_load(f)
+        except (OSError, yaml.YAMLError) as exc:
+            _LOG.warning("Failed to parse %s: %s", yml, exc)
+            return {}
+        return raw if isinstance(raw, dict) else {}
 
     legacy: dict[str, Any] = {}
     llm_txt = _LLM_PROVIDER_FILE if _LLM_PROVIDER_FILE.exists() else _LEGACY_LLM_PROVIDER_FILE
@@ -151,7 +182,10 @@ _PROVIDERS = ("openai", "xai", "local")
 def get_llm_provider() -> str:
     """Current LLM provider: 'openai', 'xai', or 'local'."""
     prov = str(_merged_config().get("llm_provider") or "openai").strip().lower()
-    return prov if prov in _PROVIDERS else "openai"
+    if prov not in _PROVIDERS:
+        _LOG.warning("Invalid llm_provider %r; falling back to openai", prov)
+        return "openai"
+    return prov
 
 
 def set_llm_provider(provider: str) -> None:
@@ -213,25 +247,24 @@ def set_local_model_id(model_id: str) -> None:
 
 
 def _load_raw_for_write() -> dict[str, Any]:
-    raw: dict[str, Any] = {}
-    yml = _yaml_to_load()
-    if yml is not None:
-        with yml.open(encoding="utf-8") as f:
-            raw = yaml.safe_load(f) or {}
-    return raw
+    return dict(_load_raw_user_config())
 
 
 def _write_merged_yaml(raw: dict[str, Any]) -> None:
-    CONFIG_YAML.parent.mkdir(parents=True, exist_ok=True)
-    merged = _deep_merge(copy.deepcopy(_DEFAULTS), raw)
-    with CONFIG_YAML.open("w", encoding="utf-8") as f:
-        yaml.safe_dump(
-            merged,
-            f,
-            default_flow_style=False,
-            sort_keys=False,
-            allow_unicode=True,
+    with _WRITE_LOCK:
+        CONFIG_YAML.parent.mkdir(parents=True, exist_ok=True)
+        merged = _deep_merge(copy.deepcopy(_DEFAULTS), raw)
+        tmp = CONFIG_YAML.with_suffix(".yaml.tmp")
+        tmp.write_text(
+            yaml.safe_dump(
+                merged,
+                default_flow_style=False,
+                sort_keys=False,
+                allow_unicode=True,
+            ),
+            encoding="utf-8",
         )
+        tmp.replace(CONFIG_YAML)
 
 
 def chats_config_path() -> Path:
@@ -245,7 +278,11 @@ def chats_dir() -> Path:
         if p.exists():
             s = p.read_text(encoding="utf-8").strip()
             if s:
-                d = Path(s)
+                d = Path(s).expanduser()
+                try:
+                    d = d.resolve()
+                except OSError:
+                    pass
                 if d.is_dir() or not d.exists():
                     return d
     return data_root() / "chats"
@@ -268,17 +305,30 @@ def get_grep_root() -> Path | None:
 
 def get_chat_history_limit() -> int:
     """Max chat log messages sent to the LLM each turn (clamped 1–2000)."""
-    v = (_merged_config().get("chat") or {}).get("history_limit", 300)
+    v = (_merged_config().get("chat") or {}).get("history_limit", 80)
     try:
         n = int(v)
         return max(1, min(n, 2000))
     except (TypeError, ValueError):
-        return 300
+        return 80
+
+
+def get_context_budgets() -> dict[str, int]:
+    """Token budgets for context assembly (stable prefix + dynamic + history)."""
+    raw = _merged_config().get("context") or {}
+    defaults = _DEFAULTS["context"]
+    out: dict[str, int] = {}
+    for k, fallback in defaults.items():
+        try:
+            out[k] = max(64, min(32_000, int(raw.get(k, fallback))))
+        except (TypeError, ValueError):
+            out[k] = int(fallback)
+    return out
 
 
 def get_memory_query_recent_turns() -> int:
     """Recent messages folded into vector-memory retrieval query (clamped 1–120)."""
-    v = (_merged_config().get("chat") or {}).get("memory_query_recent_turns", 32)
+    v = (_merged_config().get("chat") or {}).get("memory_query_recent_turns", 16)
     try:
         n = int(v)
         return max(1, min(n, 120))
@@ -304,7 +354,10 @@ _AUTONOMY_LEVELS = ("recommend", "draft", "low_risk_auto", "gated", "limited_aut
 
 def get_autonomy_level() -> str:
     v = str(_merged_config().get("autonomy") or "gated").strip().lower()
-    return v if v in _AUTONOMY_LEVELS else "gated"
+    if v not in _AUTONOMY_LEVELS:
+        _LOG.warning("Invalid autonomy %r; falling back to gated", v)
+        return "gated"
+    return v
 
 
 def set_autonomy_level(level: str) -> None:
@@ -321,7 +374,10 @@ def set_autonomy_level(level: str) -> None:
 
 
 def is_desktop_armed() -> bool:
-    if os.environ.get("ADA_DESKTOP_ARMED", "").strip().lower() in ("1", "true", "yes"):
+    env = os.environ.get("ADA_DESKTOP_ARMED", "").strip().lower()
+    if env in ("0", "false", "no", "off"):
+        return False
+    if env in ("1", "true", "yes", "on"):
         return True
     return bool(_merged_config().get("desktop_armed"))
 
@@ -377,7 +433,10 @@ _RUN_MODES = ("plan", "draft", "agent")
 
 def get_run_mode() -> str:
     v = str(_merged_config().get("run_mode") or "agent").strip().lower()
-    return v if v in _RUN_MODES else "agent"
+    if v not in _RUN_MODES:
+        _LOG.warning("Invalid run_mode %r; falling back to agent", v)
+        return "agent"
+    return v
 
 
 def set_run_mode(mode: str) -> str:
@@ -415,15 +474,28 @@ def set_spend_limits(*, max_tokens_per_run: int | None = None, warn_tokens: int 
     return cur
 
 
+def _parse_hhmm(value: str, fallback: str) -> str:
+    raw = (value or "").strip()
+    try:
+        datetime.strptime(raw, "%H:%M")
+        return raw
+    except ValueError:
+        try:
+            datetime.strptime(fallback, "%H:%M")
+            return fallback
+        except ValueError:
+            return "00:00"
+
+
 def get_quiet_hours() -> dict[str, Any]:
     qh = _merged_config().get("quiet_hours") or {}
-    start = str(qh.get("start") or "23:00").strip() or "23:00"
-    end = str(qh.get("end") or "08:00").strip() or "08:00"
+    start = _parse_hhmm(str(qh.get("start") or "23:00"), "23:00")
+    end = _parse_hhmm(str(qh.get("end") or "08:00"), "08:00")
     tz = str(qh.get("timezone") or "local").strip() or "local"
     return {
         "enabled": bool(qh.get("enabled")),
-        "start": start[:5],
-        "end": end[:5],
+        "start": start,
+        "end": end,
         "timezone": tz[:80],
     }
 
@@ -439,34 +511,85 @@ def set_quiet_hours(
     if enabled is not None:
         cur["enabled"] = bool(enabled)
     if start:
-        cur["start"] = str(start).strip()[:5]
+        cur["start"] = _parse_hhmm(str(start).strip(), cur["start"])
     if end:
-        cur["end"] = str(end).strip()[:5]
+        cur["end"] = _parse_hhmm(str(end).strip(), cur["end"])
     if timezone:
-        cur["timezone"] = str(timezone).strip()[:80]
+        cur["timezone"] = str(timezone).strip()[:80] or "local"
     raw = _load_raw_for_write()
     raw["quiet_hours"] = cur
     _write_merged_yaml(raw)
     return cur
 
 
+def in_quiet_hours(now: datetime | None = None) -> bool:
+    """True when quiet hours are enabled and the current local/configured time is inside the window."""
+    qh = get_quiet_hours()
+    if not qh.get("enabled"):
+        return False
+    start = _parse_hhmm(str(qh.get("start") or "23:00"), "23:00")
+    end = _parse_hhmm(str(qh.get("end") or "08:00"), "08:00")
+    current = now or datetime.now()
+    tz_name = str(qh.get("timezone") or "local").strip()
+    if tz_name and tz_name.lower() != "local":
+        try:
+            from zoneinfo import ZoneInfo
+
+            current = datetime.now(ZoneInfo(tz_name))
+        except Exception:
+            current = datetime.now()
+    hhmm = current.strftime("%H:%M")
+    if start <= end:
+        return start <= hhmm < end
+    return hhmm >= start or hhmm < end
+
+
 def write_api_keys(*, openai_key: str | None = None, xai_key: str | None = None) -> None:
     """Persist keys to the data-root .env (never log them). Reload process env."""
     env_path = data_root() / ".env"
     existing: dict[str, str] = {}
+    comments: list[str] = []
     if env_path.exists():
         for line in env_path.read_text(encoding="utf-8").splitlines():
-            if not line.strip() or line.lstrip().startswith("#") or "=" not in line:
+            if not line.strip() or line.lstrip().startswith("#"):
+                comments.append(line)
+                continue
+            if "=" not in line:
+                comments.append(line)
                 continue
             k, _, v = line.partition("=")
-            existing[k.strip()] = v.strip()
+            existing[k.strip()] = v.strip().strip('"').strip("'")
     if openai_key is not None:
-        existing["OPENAI_API_KEY"] = openai_key.strip()
-        os.environ["OPENAI_API_KEY"] = openai_key.strip()
+        val = openai_key.strip()
+        if "\n" in val or "\r" in val:
+            raise ValueError("API key must not contain newlines")
+        if val:
+            existing["OPENAI_API_KEY"] = val
+            os.environ["OPENAI_API_KEY"] = val
+        else:
+            existing.pop("OPENAI_API_KEY", None)
+            os.environ.pop("OPENAI_API_KEY", None)
     if xai_key is not None:
-        existing["XAI_API_KEY"] = xai_key.strip()
-        existing["xAI_API_KEY"] = xai_key.strip()
-        os.environ["XAI_API_KEY"] = xai_key.strip()
-        os.environ["xAI_API_KEY"] = xai_key.strip()
-    lines = [f"{k}={v}" for k, v in existing.items() if v]
+        val = xai_key.strip()
+        if "\n" in val or "\r" in val:
+            raise ValueError("API key must not contain newlines")
+        existing.pop("xAI_API_KEY", None)
+        if val:
+            existing["XAI_API_KEY"] = val
+            os.environ["XAI_API_KEY"] = val
+            os.environ.pop("xAI_API_KEY", None)
+        else:
+            existing.pop("XAI_API_KEY", None)
+            os.environ.pop("XAI_API_KEY", None)
+            os.environ.pop("xAI_API_KEY", None)
+    lines = [ln for ln in comments if ln.startswith("#") or not ln.strip()]
+    for k, v in existing.items():
+        if not v:
+            continue
+        safe = v.replace("\\", "\\\\").replace('"', '\\"')
+        lines.append(f'{k}="{safe}"')
     env_path.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
+    try:
+        os.chmod(env_path, 0o600)
+    except OSError:
+        pass

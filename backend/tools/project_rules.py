@@ -14,8 +14,8 @@ _RULE_NAMES = (
 )
 
 
-def load_project_rules(max_chars: int = 8000) -> str:
-    raw = (get_workspace_root() or "").strip()
+def load_project_rules(max_chars: int = 8000, workspace_root: str | None = None) -> str:
+    raw = (workspace_root or get_workspace_root() or "").strip()
     if not raw:
         return ""
     root = Path(raw)

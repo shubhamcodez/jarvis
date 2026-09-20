@@ -59,7 +59,23 @@ def trace_log(
         token_input = _estimate_tokens(message)
     if token_output is None:
         token_output = _estimate_tokens(reply)
+    extra_safe = dict(extra or {})
+    for reserved in (
+        "ts",
+        "provider",
+        "route",
+        "message",
+        "reply",
+        "success",
+        "error",
+        "duration_sec",
+        "step_count",
+        "token_input",
+        "token_output",
+    ):
+        extra_safe.pop(reserved, None)
     record = {
+        **extra_safe,
         "ts": time.time(),
         "provider": provider,
         "route": route,
@@ -71,12 +87,50 @@ def trace_log(
         "step_count": step_count,
         "token_input": token_input,
         "token_output": token_output,
-        **(extra or {}),
     }
+    try:
+        from .spans import current_trace_id
+
+        tid = current_trace_id()
+        if tid:
+            record["trace_id"] = tid
+    except Exception:
+        pass
+    try:
+        from .redact import redact_text
+        from .metrics import incr, observe, flush
+
+        record["message"] = redact_text(str(record.get("message") or ""), max_len=2000)
+        record["reply"] = redact_text(str(record.get("reply") or ""), max_len=4000)
+        incr("turns.total", provider=provider, route=route)
+        incr("turns.success" if success else "turns.error", provider=provider, route=route)
+        observe("turn.duration_sec", float(duration_sec or 0), provider=provider)
+        observe("turn.tokens_in", float(token_input or 0), provider=provider)
+        observe("turn.tokens_out", float(token_output or 0), provider=provider)
+        flush()
+    except Exception:
+        pass
     try:
         with open(path, "a", encoding="utf-8") as f:
             f.write(json.dumps(record, ensure_ascii=False) + "\n")
+        _rotate_if_needed(path)
     except Exception:
+        pass
+
+
+def _rotate_if_needed(path: Path) -> None:
+    try:
+        # Cheap line-count via size heuristic + occasional full rotate.
+        if path.stat().st_size < 8_000_000:
+            return
+        lines = path.read_text(encoding="utf-8").splitlines()
+        if len(lines) <= _MAX_LINE:
+            return
+        keep = lines[-(_MAX_LINE // 2) :]
+        tmp = path.with_suffix(".jsonl.tmp")
+        tmp.write_text("\n".join(keep) + "\n", encoding="utf-8")
+        tmp.replace(path)
+    except OSError:
         pass
 
 
@@ -87,11 +141,17 @@ def list_traces(limit: int = 500) -> list[dict]:
         return []
     lines = []
     try:
-        with open(path, "r", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if line:
-                    lines.append(line)
+        with open(path, "rb") as f:
+            f.seek(0, 2)
+            size = f.tell()
+            # Read a tail window instead of the whole file.
+            f.seek(max(0, size - max(64_000, limit * 800)))
+            data = f.read().decode("utf-8", errors="replace")
+        raw = [ln.strip() for ln in data.splitlines() if ln.strip()]
+        if size > 0 and raw:
+            # First line may be a partial after seek.
+            raw = raw[1:] if size > max(64_000, limit * 800) else raw
+        lines = raw
     except Exception:
         return []
     if len(lines) <= limit:

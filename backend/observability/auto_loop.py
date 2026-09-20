@@ -16,6 +16,7 @@ logger = logging.getLogger(__name__)
 _lock = threading.Lock()
 _last_eval_gen = 0.0
 _last_opt = 0.0
+_TASKS: set[asyncio.Task] = set()
 
 
 def _getenv(name_ada: str, default: str, name_legacy: str | None = None) -> str:
@@ -69,7 +70,9 @@ def schedule_post_turn_observability() -> None:
         loop = asyncio.get_running_loop()
     except RuntimeError:
         return
-    loop.create_task(_post_turn_observability_task())
+    task = loop.create_task(_post_turn_observability_task())
+    _TASKS.add(task)
+    task.add_done_callback(_TASKS.discard)
 
 
 async def _post_turn_observability_task() -> None:
@@ -92,14 +95,12 @@ def _run_post_turn_sync() -> None:
         if _env_bool("ADA_AUTO_EVAL_GEN", False, "JARVIS_AUTO_EVAL_GEN") and (
             now - _last_eval_gen >= eval_cd
         ):
-            _last_eval_gen = now
             do_eval = True
         if _env_bool(
             "ADA_AUTO_OPTIMIZATION_SUGGESTIONS",
-            True,
+            False,
             "JARVIS_AUTO_OPTIMIZATION_SUGGESTIONS",
         ) and (now - _last_opt >= opt_cd):
-            _last_opt = now
             do_opt = True
 
     if do_eval:
@@ -115,13 +116,17 @@ def _run_post_turn_sync() -> None:
                 ),
                 meta_source="eval_gen_auto",
             )
+            with _lock:
+                _last_eval_gen = time.time()
         except Exception as e:
-            logger.debug("auto eval gen failed: %s", e)
+            logger.warning("auto eval gen failed: %s", e)
 
     if do_opt:
         try:
             from .optimize import run_optimization_step
 
             run_optimization_step()
+            with _lock:
+                _last_opt = time.time()
         except Exception as e:
-            logger.debug("auto optimization step failed: %s", e)
+            logger.warning("auto optimization step failed: %s", e)

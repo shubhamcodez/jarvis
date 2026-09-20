@@ -7,25 +7,40 @@ from openai import OpenAI
 
 # Same model for query and chunks for correct similarity
 EMBEDDING_MODEL = "text-embedding-3-small"
+_MAX_CHARS = 24_000
 
 
 def _client(api_key: str) -> OpenAI:
-    return OpenAI(api_key=api_key)
+    return OpenAI(api_key=api_key, timeout=30.0)
 
 
 def embed_texts(api_key: str, texts: List[str]) -> List[List[float]]:
     """
     Embed one or more texts. Uses OpenAI text-embedding-3-small.
     Returns list of embedding vectors (each is list of floats).
+    Empty strings are skipped (empty vector placeholder).
     """
     if not texts:
         return []
-    texts = [t.strip() or " " for t in texts]
+    cleaned: list[str] = []
+    keep: list[int] = []
+    for i, t in enumerate(texts):
+        body = (t or "").strip()
+        if not body:
+            continue
+        cleaned.append(body[:_MAX_CHARS])
+        keep.append(i)
+    if not cleaned:
+        return [[] for _ in texts]
     client = _client(api_key)
-    resp = client.embeddings.create(input=texts, model=EMBEDDING_MODEL)
-    # Preserve order; API returns in same order as input
+    resp = client.embeddings.create(input=cleaned, model=EMBEDDING_MODEL)
     by_index = {obj.index: obj.embedding for obj in resp.data}
-    return [by_index[i] for i in range(len(texts))]
+    out: List[List[float]] = [[] for _ in texts]
+    for local_i, orig_i in enumerate(keep):
+        vec = by_index.get(local_i)
+        if vec:
+            out[orig_i] = vec
+    return out
 
 
 def embed_single(api_key: str, text: str) -> List[float]:

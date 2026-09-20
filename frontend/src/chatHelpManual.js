@@ -10,6 +10,9 @@ export const CHAT_HELP_MANUAL_MARKDOWN = `
 | \`/help\` | Show this manual (stored in your chat log; does not call the assistant). |
 | \`/compact\` | Visible summary of earlier turns (keeps the recent thread). |
 | \`/handoff\` | Export a paste-ready context dump (also copied to the clipboard). |
+| \`/recap\` | Structured recovery: current task, last result, files, next step. |
+| \`/btw …\` or \`/side …\` | Side question that does **not** start an agent plan. |
+| \`/search-memory …\` | Search other chats for a past decision or fix. |
 | \`/stop\` | Cancel the current run. |
 | \`remember …\` | Store an exact fact (decays if unused). |
 
@@ -28,6 +31,8 @@ Above the composer: **Plan** (no writes), **Draft** (approve every write), **Age
 - Search chats from the Chats menu.
 
 Project rules: if a folder is linked, Ada reads \`ADA.md\`, \`AGENTS.md\`, \`CLAUDE.md\`, or \`.ada/rules.md\`.
+Workspace skills: \`SKILL.md\` files under \`.agents/skills/\`, \`.ada/skills/\`, \`.cursor/skills/\`, or \`.claude/skills/\` (names always listed; full playbook loads when relevant).
+Thumbs on a reply store a lightweight signal (👎 also writes a short memory note). Say \`implement #64\` to fetch a GitHub issue via \`gh\`.
 - Use the **+** button to attach files or toggle **Web search** (when on, your message is also used as a search query unless you use the web-search flow from the menu).
 
 ## Models

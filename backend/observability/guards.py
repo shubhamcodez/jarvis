@@ -25,8 +25,7 @@ def check_loop_corruption(
     if not action:
         return False, ""
     if last_action and action == last_action and (not thought or not last_thought or thought == last_thought):
-        # Caller should track streak; we only flag same action twice in a row here
-        return False, ""
+        return True, f"repeated action '{action}' (streak cap {max_same_action_streak})"
     return False, ""
 
 
