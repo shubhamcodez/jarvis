@@ -129,6 +129,7 @@ import {
 } from './userProfileIntroduce'
 import {
   pushWorkspaceEdit,
+  pushWorkspaceCommitBatch,
   workspaceUndoStatus,
   peekWorkspaceUndo,
   finalizeWorkspaceUndoPop,
@@ -2107,6 +2108,9 @@ function App() {
     }
     workspaceUndoStatus(label).then((s) => {
       if (!cancelled) setWorkspaceUndoUi(s)
+      // #region agent log
+      fetch('http://127.0.0.1:7379/ingest/d4a6c664-f167-437c-bb75-f8687c530271',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'ff2cb7'},body:JSON.stringify({sessionId:'ff2cb7',location:'App.jsx:workspaceUndoStatus',message:'undo ui status',data:{label,canUndo:!!s?.canUndo,canRedo:!!s?.canRedo},timestamp:Date.now(),hypothesisId:'B'})}).catch(()=>{})
+      // #endregion
     })
     return () => {
       cancelled = true
@@ -3265,16 +3269,34 @@ function App() {
 
   const applyAllPendingEdits = useCallback(async () => {
     const files = visibleWorkspaceEditsSession?.files || []
+    const label = workspaceLocalLabel.trim()
+    const deltas = []
     for (const f of files) {
-      const r = await saveProjectFile(f.path, f.content)
+      let before = ''
+      try {
+        before = await resolveWorkspaceFileBase(f.path)
+      } catch {
+        before = ''
+      }
+      const r = await saveProjectFile(f.path, f.content, { skipUndoRecord: true })
       if (!r?.ok) {
         alert(r?.error || `Could not apply ${f.path}`)
         return
       }
+      if (before !== f.content) {
+        deltas.push({ relPath: f.path, before, after: f.content })
+      }
     }
+    if (label && deltas.length) {
+      await pushWorkspaceCommitBatch(label, deltas)
+      setWorkspaceUndoTick((t) => t + 1)
+    }
+    // #region agent log
+    fetch('http://127.0.0.1:7379/ingest/d4a6c664-f167-437c-bb75-f8687c530271',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'ff2cb7'},body:JSON.stringify({sessionId:'ff2cb7',location:'App.jsx:applyAllPendingEdits',message:'apply-all batch undo',data:{fileCount:files.length,deltaCount:deltas.length},timestamp:Date.now(),hypothesisId:'C'})}).catch(()=>{})
+    // #endregion
     setPendingWorkspaceEdits(null)
     setWorkspaceReviewHiddenPaths(new Set())
-  }, [visibleWorkspaceEditsSession, saveProjectFile])
+  }, [visibleWorkspaceEditsSession, saveProjectFile, workspaceLocalLabel, resolveWorkspaceFileBase])
 
   const discardAllPendingEdits = useCallback(() => {
     setPendingWorkspaceEdits(null)

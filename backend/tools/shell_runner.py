@@ -3,7 +3,7 @@ Host shell execution for the shell agent (enabled by default — dangerous).
 
 Shell is **on** unless explicitly turned off with `ADA_ENABLE_SHELL=0` / `false`, or
 `ADA_DISABLE_SHELL=1` (JARVIS_* variants still honored). Commands run under a configurable
-working directory (default: <repo>/ada-shell-work). On Windows, uses Git Bash if `bash` is on PATH,
+working directory (default: <repo>/jarvis-shell-work). On Windows, uses Git Bash if `bash` is on PATH,
 otherwise PowerShell. Override with ADA_SHELL=bash|powershell|sh.
 
 This is NOT a security boundary. Anyone who can reach the API can wipe data.
@@ -56,14 +56,14 @@ def _repo_root() -> Path:
 
 
 def get_shell_workdir() -> Path:
-    raw = _getenv("ADA_SHELL_WORKDIR", "JARVIS_SHELL_WORKDIR").strip()
+    raw = _getenv("JARVIS_SHELL_WORKDIR", "ADA_SHELL_WORKDIR").strip()
     if raw:
         p = Path(raw).expanduser()
     else:
         root = _repo_root()
+        jarvis_p = root / "jarvis-shell-work"
         ada_p = root / "ada-shell-work"
-        leg_p = root / "jarvis-shell-work"
-        p = ada_p if ada_p.exists() or not leg_p.exists() else leg_p
+        p = ada_p if ada_p.exists() and not jarvis_p.exists() else jarvis_p
     return p.resolve()
 
 

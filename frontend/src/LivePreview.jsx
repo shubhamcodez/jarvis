@@ -25,7 +25,14 @@ function srcDocFor(lang, source) {
 
 export function isPreviewLanguage(lang) {
   const l = (lang || '').toLowerCase()
-  return l === 'html' || l === 'svg' || l === 'preview' || l === 'ada-preview' || l === 'mermaid'
+  return (
+    l === 'html' ||
+    l === 'svg' ||
+    l === 'preview' ||
+    l === 'ada-preview' ||
+    l === 'jarvis-preview' ||
+    l === 'mermaid'
+  )
 }
 
 export default function LivePreview({ language, children, className }) {

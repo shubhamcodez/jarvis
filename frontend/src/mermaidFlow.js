@@ -36,9 +36,17 @@ export function parseMermaidFlow(src) {
   const header = lines[0]
   if (!/^(graph|flowchart)\b/i.test(header)) return null
   const dir = (/(\bLR\b|\bRL\b|\bTB\b|\bTD\b|\bBT\b)/i.exec(header) || ['TD'])[0].toUpperCase()
+  const afterDir = header
+    .replace(/^(graph|flowchart)\b/i, '')
+    .replace(/^\s*(?:LR|RL|TB|TD|BT)\b/i, '')
+    .replace(/^[;\s]+/, '')
+  const inline = afterDir
+    .split(';')
+    .map((s) => s.trim())
+    .filter(Boolean)
   const nodes = new Map()
   const edges = []
-  for (const line of lines.slice(1)) {
+  for (const line of [...inline, ...lines.slice(1)]) {
     const edge = line.match(
       /^(.+?)\s*-->(?:\|([^|]+)\|)?\s*(.+)$/,
     )
@@ -55,7 +63,11 @@ export function parseMermaidFlow(src) {
     if (only) takeNode(only.id, only.label, only.shape, nodes)
   }
   if (!nodes.size) return null
-  return { dir: dir === 'TD' ? 'TB' : dir, nodes: [...nodes.values()], edges }
+  const parsed = { dir: dir === 'TD' ? 'TB' : dir, nodes: [...nodes.values()], edges }
+  // #region agent log
+  fetch('http://127.0.0.1:7379/ingest/d4a6c664-f167-437c-bb75-f8687c530271',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'ff2cb7'},body:JSON.stringify({sessionId:'ff2cb7',location:'mermaidFlow.js:parseMermaidFlow',message:'parsed mermaid',data:{dir:parsed.dir,nodeCount:parsed.nodes.length,edgeCount:parsed.edges.length,inlineCount:inline.length},timestamp:Date.now(),hypothesisId:'D'})}).catch(()=>{})
+  // #endregion
+  return parsed
 }
 
 function mermaidUnsupportedSvg(src) {

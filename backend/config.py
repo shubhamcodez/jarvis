@@ -311,12 +311,17 @@ def _write_merged_yaml(raw: dict[str, Any]) -> None:
 
 def chats_config_path() -> Path:
     """Path to file storing custom chats directory."""
-    return data_root() / "ada-chats-dir.txt"
+    return data_root() / "jarvis-chats-dir.txt"
 
 
 def chats_dir() -> Path:
     """Directory where chat logs are stored."""
-    for p in (chats_config_path(), data_root() / "jarvis-chats-dir.txt", _REPO_ROOT / "ada-chats-dir.txt"):
+    for p in (
+        chats_config_path(),
+        data_root() / "ada-chats-dir.txt",
+        _REPO_ROOT / "ada-chats-dir.txt",
+        _REPO_ROOT / "jarvis-chats-dir.txt",
+    ):
         if p.exists():
             s = p.read_text(encoding="utf-8").strip()
             if s:

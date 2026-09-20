@@ -10,8 +10,9 @@
  * @returns {{ start: number, query: string } | null}
  */
 export function getActiveFileMention(text, cursorPos) {
-  const pos = Math.max(0, Math.min(cursorPos, text.length))
-  const before = text.slice(0, pos)
+  const src = text == null ? '' : String(text)
+  const pos = Math.max(0, Math.min(cursorPos ?? 0, src.length))
+  const before = src.slice(0, pos)
   const at = before.lastIndexOf('@')
   if (at === -1) return null
   if (at > 0) {

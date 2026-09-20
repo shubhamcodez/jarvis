@@ -264,6 +264,21 @@ class BrandEnvAliasTests(unittest.TestCase):
 
                 self.assertFalse(is_shell_enabled())
 
+    def test_shell_workdir_defaults_to_jarvis(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            with patch.dict("os.environ", {"ADA_SHELL_WORKDIR": "", "JARVIS_SHELL_WORKDIR": ""}, clear=False):
+                with patch("tools.shell_runner._repo_root", return_value=root):
+                    from tools.shell_runner import get_shell_workdir
+
+                    wd = get_shell_workdir()
+                    self.assertTrue(str(wd).replace("\\", "/").endswith("jarvis-shell-work"))
+
+    def test_chats_config_path_is_jarvis(self):
+        from config import chats_config_path
+
+        self.assertTrue(str(chats_config_path()).replace("\\", "/").endswith("jarvis-chats-dir.txt"))
+
 
 class WorkspaceRunTests(unittest.TestCase):
     def test_command_for_python(self):
