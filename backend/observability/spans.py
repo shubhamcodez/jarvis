@@ -20,7 +20,7 @@ from contextvars import ContextVar
 from pathlib import Path
 from typing import Any, Iterator, Optional
 
-from .config import TRACES_DIR, ensure_dirs
+from .config import ensure_dirs, obs_dir
 from .redact import redact_text, redact_value
 
 _CURRENT: ContextVar[Optional["Span"]] = ContextVar("ada_span", default=None)
@@ -31,7 +31,7 @@ _MAX_BYTES = 12_000_000
 
 def _path() -> Path:
     ensure_dirs()
-    return TRACES_DIR / SPAN_FILE
+    return obs_dir() / "traces" / SPAN_FILE
 
 
 class Span:
@@ -131,21 +131,10 @@ def _rotate(path: Path) -> None:
 
 
 def list_spans(limit: int = 200, trace_id: Optional[str] = None) -> list[dict[str, Any]]:
-    path = _path()
-    if not path.exists():
-        return []
-    out: list[dict[str, Any]] = []
-    try:
-        for line in path.read_text(encoding="utf-8").splitlines()[- max(limit * 4, 200) :]:
-            if not line.strip():
-                continue
-            try:
-                rec = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if trace_id and rec.get("trace_id") != trace_id:
-                continue
-            out.append(rec)
-    except OSError:
-        return []
-    return out[-limit:]
+    from .config import read_jsonl_records
+
+    ensure_dirs()
+    rows = read_jsonl_records("traces", SPAN_FILE, limit=max(limit, 200))
+    if trace_id:
+        rows = [r for r in rows if r.get("trace_id") == trace_id]
+    return rows[-max(1, limit) :]

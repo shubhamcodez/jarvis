@@ -11,7 +11,7 @@ import os
 import threading
 import time
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("jarvis.observability")
 
 _lock = threading.Lock()
 _last_eval_gen = 0.0

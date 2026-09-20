@@ -9,7 +9,7 @@ import time
 from pathlib import Path
 from typing import Any, Optional
 
-from .config import TRACES_DIR, ensure_dirs
+from .config import ensure_dirs, obs_dir
 
 try:
     from tools.sandbox_markdown import redact_markdown_chart_embeds
@@ -23,7 +23,7 @@ _MAX_LINE = 100_000  # cap lines per file, then rotate
 
 def _trace_path() -> Path:
     ensure_dirs()
-    return TRACES_DIR / TRACE_FILE
+    return obs_dir() / "traces" / TRACE_FILE
 
 
 def get_trace_log_path() -> str:
@@ -135,33 +135,8 @@ def _rotate_if_needed(path: Path) -> None:
 
 
 def list_traces(limit: int = 500) -> list[dict]:
-    """Read latest trace records (newest last in file, so we tail)."""
-    path = _trace_path()
-    if not path.exists():
-        return []
-    lines = []
-    try:
-        with open(path, "rb") as f:
-            f.seek(0, 2)
-            size = f.tell()
-            # Read a tail window instead of the whole file.
-            f.seek(max(0, size - max(64_000, limit * 800)))
-            data = f.read().decode("utf-8", errors="replace")
-        raw = [ln.strip() for ln in data.splitlines() if ln.strip()]
-        if size > 0 and raw:
-            # First line may be a partial after seek.
-            raw = raw[1:] if size > max(64_000, limit * 800) else raw
-        lines = raw
-    except Exception:
-        return []
-    if len(lines) <= limit:
-        out = lines
-    else:
-        out = lines[-limit:]
-    result = []
-    for line in out:
-        try:
-            result.append(json.loads(line))
-        except json.JSONDecodeError:
-            continue
-    return result
+    """Read latest trace records from Jarvis (plus leftover Ada file if needed)."""
+    from .config import read_jsonl_records
+
+    ensure_dirs()
+    return read_jsonl_records("traces", TRACE_FILE, limit=max(1, limit))

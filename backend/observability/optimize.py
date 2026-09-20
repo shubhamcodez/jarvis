@@ -9,7 +9,7 @@ import re
 from pathlib import Path
 from typing import Any, Optional
 
-from .config import OPT_DIR, ensure_dirs
+from .config import ensure_dirs, obs_dir
 from .trace import list_traces
 from .evals import load_eval_runs
 from .eval_runner import pass_at_k
@@ -42,7 +42,7 @@ Keep each list to 2–5 items. Be specific and actionable. If there is not enoug
 
 def _stats_path() -> Path:
     ensure_dirs()
-    return OPT_DIR / STATS_FILE
+    return obs_dir() / "optimization" / STATS_FILE
 
 
 def aggregate_trace_stats(trace_limit: int = 1000) -> dict[str, Any]:

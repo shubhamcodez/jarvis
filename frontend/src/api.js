@@ -648,6 +648,12 @@ export async function getObservabilityLogs(limit = 200) {
   return request(`/observability/logs?limit=${limit}`)
 }
 
+export async function getObservabilityActions(limit = 200, traceId) {
+  const q = new URLSearchParams({ limit: String(limit) })
+  if (traceId) q.set('trace_id', traceId)
+  return request(`/observability/actions?${q}`)
+}
+
 export async function getMemoryStatus() {
   return request('/memory/status')
 }

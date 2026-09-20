@@ -301,6 +301,22 @@ def _history_with_current(hist: Optional[list], message: str) -> Optional[list]:
     return rows
 
 
+def _persist_agent_step(step, thought, action, description, result, done) -> None:
+    try:
+        from observability.actions import log_agent_action
+
+        log_agent_action(
+            step=step,
+            action=action or "",
+            description=description or "",
+            thought=thought or "",
+            result=result,
+            done=bool(done),
+        )
+    except Exception:
+        pass
+
+
 def _require_chat_id(chat_id: str) -> str:
     try:
         if not is_valid_chat_id(chat_id):
@@ -758,6 +774,7 @@ async def send_message(body: SendMessageRequest, request: Request):
     step_queue: queue.Queue = queue.Queue()
 
     def on_step(step, thought, action, description, result, done, screenshot_base64=None):
+        _persist_agent_step(step, thought, action, description, result, done)
         step_queue.put({
             "step": step, "thought": thought or "", "action": action or "",
             "description": description or "", "result": result, "done": done,
@@ -1323,6 +1340,7 @@ async def send_message_stream(body: SendMessageRequest, request: Request):
         step_queue: queue.Queue = queue.Queue()
 
         def on_step(step, thought, action, description, result, done, screenshot_base64=None):
+            _persist_agent_step(step, thought, action, description, result, done)
             step_queue.put(
                 {
                     "step": step,
@@ -2475,6 +2493,14 @@ async def api_get_struct_logs(limit: int = 200):
     from observability.struct_log import list_recent_logs
 
     return {"logs": list_recent_logs(limit=max(1, min(limit, 2000)))}
+
+
+@app.get("/observability/actions")
+async def api_get_agent_actions(limit: int = 200, trace_id: Optional[str] = None):
+    """Persisted specialist steps (desktop clicks, coding, shell)."""
+    from observability.actions import list_actions
+
+    return {"actions": list_actions(limit=max(1, min(limit, 2000)), trace_id=trace_id)}
 
 
 @app.post("/observability/feedback-assess")

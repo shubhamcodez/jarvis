@@ -8,7 +8,7 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
-from .config import OPT_DIR, ensure_dirs
+from .config import ensure_dirs, obs_dir
 
 _LOCK = threading.Lock()
 _COUNTERS: dict[str, float] = defaultdict(float)
@@ -61,7 +61,7 @@ def flush(force: bool = False) -> None:
     if not force and now - _LAST_FLUSH < 15:
         return
     ensure_dirs()
-    path = OPT_DIR / "metrics.json"
+    path = obs_dir() / "optimization" / "metrics.json"
     tmp = path.with_suffix(".json.tmp")
     data = snapshot()
     try:
@@ -73,7 +73,7 @@ def flush(force: bool = False) -> None:
 
 
 def load_latest() -> dict[str, Any]:
-    path = OPT_DIR / "metrics.json"
+    path = obs_dir() / "optimization" / "metrics.json"
     if not path.exists():
         return snapshot()
     try:

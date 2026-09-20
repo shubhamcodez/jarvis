@@ -8,7 +8,7 @@ import json
 from pathlib import Path
 from typing import Any, Optional
 
-from .config import EVALS_DIR, ensure_dirs
+from .config import ensure_dirs, obs_dir
 
 CASES_FILE = "eval_cases.jsonl"
 RUNS_FILE = "eval_runs.jsonl"
@@ -16,12 +16,12 @@ RUNS_FILE = "eval_runs.jsonl"
 
 def _cases_path() -> Path:
     ensure_dirs()
-    return EVALS_DIR / CASES_FILE
+    return obs_dir() / "evals" / CASES_FILE
 
 
 def _runs_path() -> Path:
     ensure_dirs()
-    return EVALS_DIR / RUNS_FILE
+    return obs_dir() / "evals" / RUNS_FILE
 
 
 class EvalCase:

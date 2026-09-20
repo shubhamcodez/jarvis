@@ -22,7 +22,7 @@ src-tauri/target/
 custom_agents/
 venv/
 jarvis-observability/
-jarvis-observability/
+ada-observability/
 
 # Shell agent default workdir (host commands)
 ada-shell-work/

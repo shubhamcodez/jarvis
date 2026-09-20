@@ -58,18 +58,23 @@ _CONFIGURED = False
 
 
 def configure_struct_logging() -> None:
-    """Attach a JSON formatter to ada.* loggers once (idempotent)."""
+    """Attach a JSON formatter to jarvis.* and leftover ada.* loggers (idempotent)."""
     global _CONFIGURED
     if _CONFIGURED:
         return
-    root = logging.getLogger("jarvis")
-    if any(isinstance(h.formatter, JsonFormatter) for h in root.handlers if h.formatter):
+    roots = [logging.getLogger("jarvis"), logging.getLogger("ada")]
+    if any(
+        isinstance(h.formatter, JsonFormatter)
+        for root in roots
+        for h in root.handlers
+        if h.formatter
+    ):
         _CONFIGURED = True
         return
     formatter = JsonFormatter()
     stream = logging.StreamHandler()
     stream.setFormatter(formatter)
-    root.addHandler(stream)
+    file_handler = None
     try:
         from .config import OBS_DIR, ensure_dirs
 
@@ -78,38 +83,29 @@ def configure_struct_logging() -> None:
         log_dir.mkdir(parents=True, exist_ok=True)
         from logging.handlers import RotatingFileHandler
 
-        fh = RotatingFileHandler(
+        file_handler = RotatingFileHandler(
             log_dir / "app.jsonl",
             maxBytes=8_000_000,
             backupCount=3,
             encoding="utf-8",
         )
-        fh.setFormatter(formatter)
-        root.addHandler(fh)
+        file_handler.setFormatter(formatter)
     except Exception:
-        pass
-    if root.level == logging.NOTSET:
-        root.setLevel(logging.INFO)
+        file_handler = None
+    for root in roots:
+        root.addHandler(stream)
+        if file_handler is not None:
+            root.addHandler(file_handler)
+        if root.level == logging.NOTSET:
+            root.setLevel(logging.INFO)
     _CONFIGURED = True
 
 
 def list_recent_logs(limit: int = 200) -> list[dict]:
     """Tail structured application logs from disk."""
     try:
-        from .config import OBS_DIR
+        from .config import read_jsonl_records
 
-        path = OBS_DIR / "logs" / "app.jsonl"
-        if not path.exists():
-            return []
-        lines = path.read_text(encoding="utf-8").splitlines()
-        out = []
-        for line in lines[-max(1, limit) :]:
-            if not line.strip():
-                continue
-            try:
-                out.append(json.loads(line))
-            except json.JSONDecodeError:
-                out.append({"raw": line[:500]})
-        return out
+        return read_jsonl_records("logs", "app.jsonl", limit=max(1, limit))
     except OSError:
         return []

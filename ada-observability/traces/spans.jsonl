@@ -1,2 +1,0 @@
-{"ts": 1789880209.17479, "span_id": "a9cdbe21d1a145de", "trace_id": "5b8a634cd9404024a667f30fb7661c97", "parent_id": "6bd8f15e00724ee6", "name": "retrieval", "status": "ok", "error": null, "duration_ms": 0.01, "attrs": {}, "events": []}
-{"ts": 1789880209.17478, "span_id": "6bd8f15e00724ee6", "trace_id": "5b8a634cd9404024a667f30fb7661c97", "parent_id": null, "name": "turn", "status": "ok", "error": null, "duration_ms": 0.35, "attrs": {"route": "test", "ok": true}, "events": []}
