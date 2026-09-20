@@ -11,7 +11,7 @@ def search_chats(query: str, limit: int = 30) -> list[dict[str, Any]]:
     if not q:
         return []
     hits: list[dict[str, Any]] = []
-    for chat in list_chats()[:200]:
+    for chat in list_chats()[:2000]:
         title = chat.get("title") or ""
         cid = chat.get("id") or ""
         msgs = read_chat_log(cid)[-80:]

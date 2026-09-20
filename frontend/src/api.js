@@ -1,3 +1,5 @@
+import { extractWorkspaceFileEdits } from './workspaceFileEdits'
+
 function detectDesktopShell() {
   if (typeof window === 'undefined') return false
   return Boolean(window.__TAURI_INTERNALS__ || window.__TAURI__)
@@ -217,18 +219,28 @@ export async function sendMessageStream(
             full += data.delta
             queueChunk(data.delta)
           }
-          if (data.done && data.reply != null) {
-            full = data.reply
+          if (data.done) {
+            let reply = data.reply != null ? data.reply : full
+            let edits = data.file_edits ?? null
+            if (!edits?.length) {
+              const parsed = extractWorkspaceFileEdits(data.reply != null ? data.reply : full)
+              if (parsed.edits.length) {
+                edits = parsed.edits
+                if (data.reply == null) reply = parsed.clean
+              }
+            }
+            if (data.error && !reply) reply = data.error
+            full = reply || full
             if (data.tool_used) {
               toolUsed = data.tool_used
               onToolUsed?.(data.tool_used)
             }
             flushRemaining()
-            onDone?.(data.reply, data.file_edits ?? null)
+            onDone?.(reply || '', edits)
             return {
-              reply: data.reply,
+              reply: reply || '',
               tool_used: data.tool_used ?? null,
-              file_edits: data.file_edits ?? null,
+              file_edits: edits,
               pending_approvals: data.pending_approvals ?? null,
               run_id: data.run_id ?? null,
               task_id: data.task_id ?? null,
@@ -239,8 +251,11 @@ export async function sendMessageStream(
     }
   }
   flushRemaining()
-  if (full) onDone?.(full, null)
-  return { reply: full, tool_used: toolUsed, file_edits: null, pending_approvals: null }
+  const parsed = extractWorkspaceFileEdits(full)
+  const reply = parsed.edits.length ? parsed.clean : full
+  const edits = parsed.edits.length ? parsed.edits : null
+  if (reply) onDone?.(reply, edits)
+  return { reply, tool_used: toolUsed, file_edits: edits, pending_approvals: null }
   } catch (err) {
     if (rafId && typeof cancelAnimationFrame === 'function') {
       cancelAnimationFrame(rafId)
