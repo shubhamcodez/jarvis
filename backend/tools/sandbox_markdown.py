@@ -2,9 +2,9 @@
 Format sandbox stdout as Markdown with embedded images for the chat UI.
 
 Convention (preferred): print one line per figure:
-  ADA_IMAGE_PNG:<base64 with no newlines>
-  ADA_IMAGE_JPEG:...
-  (Legacy JARVIS_IMAGE_* lines are still accepted.)
+  JARVIS_IMAGE_PNG:<base64 with no newlines>
+  JARVIS_IMAGE_JPEG:...
+  (Legacy ADA_IMAGE_* lines are still accepted.)
 Heuristic: a single line that looks like PNG/JPEG base64 (e.g. raw print of b64) is also embedded.
 """
 from __future__ import annotations

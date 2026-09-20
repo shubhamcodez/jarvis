@@ -19,6 +19,7 @@ def _platform_data_dir() -> Path:
 def _prepare_env() -> None:
     frozen = getattr(sys, "frozen", False)
     if frozen:
+        os.environ.setdefault("JARVIS_PACKAGED", "1")
         os.environ.setdefault("ADA_PACKAGED", "1")
     os.environ.setdefault("UVICORN_RELOAD", "0")
     if frozen:
@@ -26,6 +27,7 @@ def _prepare_env() -> None:
     else:
         here = Path(__file__).resolve().parent
     os.chdir(str(here) if (here / "main.py").exists() else str(Path(__file__).resolve().parent))
+    os.environ.setdefault("JARVIS_DATA_DIR", str(_platform_data_dir()))
     os.environ.setdefault("ADA_DATA_DIR", str(_platform_data_dir()))
 
 

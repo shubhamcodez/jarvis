@@ -52,12 +52,10 @@ def start_run(*, chat_id: str = "", task_id: str = "", run_id: Optional[str] = N
             existing["chat_id"] = chat_id or existing.get("chat_id") or ""
             if task_id:
                 existing["task_id"] = task_id
-            existing["status"] = "running"
-            existing["stop_reason"] = ""
             existing["updated_at"] = time.time()
-            ev = existing.get("cancel")
-            if ev:
-                ev.clear()
+            # Do not uncancel an in-flight Stop, and do not reset stop_reason.
+            if existing.get("status") not in ("cancelled", "error"):
+                existing["status"] = "running"
             _prune_runs_locked()
             return public_run(existing)
     rec = {
@@ -359,13 +357,13 @@ def restore_checkpoint(checkpoint_id: str) -> dict[str, Any]:
         if rel is None or before is None:
             return {"ok": False, "error": "checkpoint has no file snapshot"}
         from agents.execution_policy import deny_if_blocked
-        from tools.workspace_io import write_file
+        from tools.workspace_io import write_file_raw
 
         blocked = deny_if_blocked("workspace_write")
         if blocked:
             return {**blocked, "id": cid, "kind": kind}
         try:
-            write_file(rel, before)
+            write_file_raw(rel, before)
         except Exception as e:
             return {"ok": False, "error": str(e)}
         return {"ok": True, "restored": rel, "kind": kind, "id": cid}

@@ -41,8 +41,9 @@ def _scan(root: Path, max_files: int = 400) -> dict[str, Any]:
                 langs[suf] += 1
             rel = (rel_dir / fn).as_posix() if rel_dir.parts else fn
             low = rel.lower()
-            if fn in {"AGENTS.md", "ADA.md", "CLAUDE.md", ".ada/rules.md"} or rel in {
+            if fn in {"AGENTS.md", "JARVIS.md", "ADA.md", "CLAUDE.md", ".jarvis/rules.md", ".ada/rules.md"} or rel in {
                 "AGENTS.md",
+                "JARVIS.md",
                 "ADA.md",
                 "CLAUDE.md",
             }:

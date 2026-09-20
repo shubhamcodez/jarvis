@@ -12,6 +12,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 from typing import Any, Optional
 
@@ -39,7 +40,23 @@ _RUN_TRIGGERS = frozenset(
 )
 
 
-def run_sandboxed_python(code: str, timeout_sec: float = DEFAULT_TIMEOUT_SEC) -> dict[str, Any]:
+def _kill_proc(proc: subprocess.Popen) -> None:
+    try:
+        proc.kill()
+    except Exception:
+        pass
+    try:
+        proc.wait(timeout=2)
+    except Exception:
+        pass
+
+
+def run_sandboxed_python(
+    code: str,
+    timeout_sec: float = DEFAULT_TIMEOUT_SEC,
+    *,
+    run_id: Optional[str] = None,
+) -> dict[str, Any]:
     """
     Execute Python in a subprocess with restricted globals (see sandbox_worker.py).
 
@@ -77,33 +94,58 @@ def run_sandboxed_python(code: str, timeout_sec: float = DEFAULT_TIMEOUT_SEC) ->
     }
     env = {k: v for k, v in env.items() if v}
 
+    proc = None
+    stdout = ""
+    stderr = ""
     try:
-        proc = subprocess.run(
+        proc = subprocess.Popen(
             [sys.executable, str(WORKER)],
-            input=json.dumps({"code": code}),
-            capture_output=True,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
             encoding="utf-8",
             errors="replace",
-            timeout=t,
             env=env,
             cwd=scratch,
         )
-    except subprocess.TimeoutExpired:
-        return {"ok": False, "error": f"timeout after {t}s", "stdout": "", "stderr": ""}
+        payload = json.dumps({"code": code})
+        try:
+            proc.stdin.write(payload)
+            proc.stdin.close()
+        except Exception:
+            pass
+        deadline = time.monotonic() + t
+        while proc.poll() is None:
+            if run_id:
+                try:
+                    from agents.run_control import is_cancelled
+
+                    if is_cancelled(run_id):
+                        _kill_proc(proc)
+                        return {"ok": False, "error": "Stopped by user.", "stdout": "", "stderr": ""}
+                except Exception:
+                    pass
+            if time.monotonic() >= deadline:
+                _kill_proc(proc)
+                return {"ok": False, "error": f"timeout after {t}s", "stdout": "", "stderr": ""}
+            time.sleep(0.2)
+        stdout, stderr = proc.communicate(timeout=2)
     except Exception as e:
+        if proc is not None:
+            _kill_proc(proc)
         return {"ok": False, "error": f"subprocess failed: {type(e).__name__}: {e}"}
     finally:
         shutil.rmtree(scratch, ignore_errors=True)
 
-    raw_out = (proc.stdout or "").strip()
+    raw_out = (stdout or "").strip()
     if not raw_out:
-        err = (proc.stderr or "").strip()
+        err = (stderr or "").strip()
         return {
             "ok": False,
             "error": "sandbox produced no output",
             "stderr": err,
-            "returncode": proc.returncode,
+            "returncode": proc.returncode if proc is not None else -1,
         }
     try:
         result = json.loads(raw_out.splitlines()[-1])
@@ -112,9 +154,9 @@ def run_sandboxed_python(code: str, timeout_sec: float = DEFAULT_TIMEOUT_SEC) ->
             "ok": False,
             "error": "invalid sandbox JSON output",
             "raw_stdout": raw_out[:2000],
-            "stderr": (proc.stderr or "")[:2000],
+            "stderr": (stderr or "")[:2000],
         }
-    if proc.returncode != 0 and not result.get("ok"):
+    if proc is not None and proc.returncode != 0 and not result.get("ok"):
         result.setdefault("returncode", proc.returncode)
     return result
 

@@ -62,7 +62,7 @@ def configure_struct_logging() -> None:
     global _CONFIGURED
     if _CONFIGURED:
         return
-    root = logging.getLogger("ada")
+    root = logging.getLogger("jarvis")
     if any(isinstance(h.formatter, JsonFormatter) for h in root.handlers if h.formatter):
         _CONFIGURED = True
         return

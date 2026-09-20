@@ -11,7 +11,7 @@ Public asks from Cursor, Claude Code, Codex, Devin, OpenHands, and OpenClaw (202
 | Deterministic verification | Anthropic long-running harness, OpenAI “taste as linters” | `diagnostics.py` compile + unittest/pytest. The model cannot declare victory |
 | Critic / best-of-N / retry | OpenHands critic, Codex subagent wake | Separate critic; auto-retry when tests fail |
 | Compact stable tools | 2026 harness blueprint | list_dir, grep, read_file, apply_patch, write_file, run_tests, run_python, update_plan, write_note, finish |
-| AGENTS.md / project rules | Devin, Claude Code, Cursor | Loaded from the workspace (`AGENTS.md`, `ADA.md`, `CLAUDE.md`) |
+| AGENTS.md / project rules | Devin, Claude Code, Cursor | Loaded from the workspace (`AGENTS.md`, `JARVIS.md`, `CLAUDE.md`) |
 | Artifact / filesystem memory | Blueprint, Claude Code compaction | `jarvis-artifacts/` handles for notes and localization |
 | Checkpoints / resume | Claude Code `/checkpoint`, OpenClaw overnight agents | Existing run_control checkpoints + overlay export |
 | LSP / diagnostics after edit | LangChain dcode, FalkorDB, Devin | Stdio LSP after every patch (`jedi`/`pylsp`/`pyright` or bundled `jarvis-pylsp`) |
@@ -30,7 +30,7 @@ Public asks from Cursor, Claude Code, Codex, Devin, OpenHands, and OpenClaw (202
 | Context leftover / compact control | Claude Code `#1157`, Reddit tips | `/compact`, `/recap`, history compaction in prompt_assembly |
 | Elide old tool results | arXiv 2608.26218 (28%→49% F2PF) | SWE loop already clips + compact after 20 turns |
 | LSP / code-graph for cheaper localization | FalkorDB SWE-bench harness | Cheap grep localize + LSP diagnostics on edited files |
-| Interactive HTML/SVG previews | OpenHands `#2691` | Sandboxed iframe for ` ```html ` / ` ```svg ` and `ADA_PREVIEW_HTML` / `ADA_PREVIEW_SVG` |
+| Interactive HTML/SVG previews | OpenHands `#2691` | Sandboxed iframe for ` ```html ` / ` ```svg ` and `JARVIS_PREVIEW_HTML` / `JARVIS_PREVIEW_SVG` |
 | `/diff` `/undo` `/commit` git loop | Aider, Claude Code commands | `/diff` (git status+diff), `/undo` (workbench or checkpoint), `/rewind` (drop last reply) |
 | `/usage` `/cost` `/stats` | Claude Code | Token totals over the last 80 traces |
 | `/init` portable AGENTS.md | Claude Code `/init`, `#6235` | Scans the linked repo and writes `AGENTS.md` if missing |

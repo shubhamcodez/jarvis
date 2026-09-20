@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import threading
 import time
 import uuid
@@ -138,14 +139,24 @@ def begin_run(
             st["task_id"] = task.get("id") or ""
             save_state(st)
         except Exception:
-            pass
+            logging.getLogger("jarvis.agent_state").warning("create_task failed", exc_info=True)
     return st
 
 
-def resume_run(chat_id: Optional[str], task: dict[str, Any]) -> dict[str, Any]:
+def resume_run(
+    chat_id: Optional[str],
+    task: dict[str, Any],
+    *,
+    preferred_run_id: Optional[str] = None,
+) -> dict[str, Any]:
     st = load_state(chat_id)
     st["chat_id"] = chat_id or st.get("chat_id") or task.get("chat_id") or ""
-    st["run_id"] = task.get("run_id") or st.get("run_id") or str(uuid.uuid4())
+    st["run_id"] = (
+        (preferred_run_id or "").strip()
+        or task.get("run_id")
+        or st.get("run_id")
+        or str(uuid.uuid4())
+    )
     st["goal"] = task.get("goal") or st.get("goal") or ""
     st["plan"] = list(task.get("plan") or st.get("plan") or [])
     st["task_id"] = task.get("id") or ""

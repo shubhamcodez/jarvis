@@ -72,6 +72,36 @@ class DpiMappingTests(unittest.TestCase):
         self.assertEqual(oy, 40)
 
 
+class StartRunCancelTests(unittest.TestCase):
+    def test_reuse_does_not_clear_cancel(self):
+        from agents.run_control import cancel_run, is_cancelled, start_run
+
+        rec = start_run(chat_id="c")
+        rid = rec["run_id"]
+        cancel_run(rid, "user_stop")
+        start_run(chat_id="c", run_id=rid)
+        self.assertTrue(is_cancelled(rid))
+
+
+class RateLimitTests(unittest.TestCase):
+    def test_bucket(self):
+        from observability.rate_limit import allow
+
+        key = "test.bucket"
+        self.assertTrue(allow(key, limit=2, window_sec=30))
+        self.assertTrue(allow(key, limit=2, window_sec=30))
+        self.assertFalse(allow(key, limit=2, window_sec=30))
+
+
+class ResumeRunIdTests(unittest.TestCase):
+    def test_prefers_http_run_id(self):
+        from agents.agent_state import resume_run
+
+        task = {"id": "t1", "run_id": "old-run", "goal": "x", "plan": [], "chat_id": ""}
+        st = resume_run("", task, preferred_run_id="http-run")
+        self.assertEqual(st["run_id"], "http-run")
+
+
 class StopReasonTests(unittest.TestCase):
     def test_cancel_and_spend(self):
         from agents.run_control import cancel_run, start_run, stop_reason

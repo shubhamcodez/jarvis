@@ -134,7 +134,7 @@ import ReactMarkdown, { defaultUrlTransform } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import './App.css'
 
-const CODING_LAYOUT_STORAGE_KEY = 'ada-coding-layout-widths'
+const CODING_LAYOUT_STORAGE_KEY = 'jarvis-coding-layout-widths'
 
 const EXPLORER_PANEL = { min: 200, max: 560, default: 280 }
 const CHAT_RAIL_PANEL = { min: 280, max: 720, default: 400 }
@@ -603,11 +603,11 @@ function ChatFilePreview({ preview, onClose, onSave, colorScheme }) {
   )
 }
 
-const CODING_MODE_KEY = 'ada-coding-mode-enabled'
+const CODING_MODE_KEY = 'jarvis-coding-mode-enabled'
 
 function readStoredCodingMode() {
   try {
-    const v = localStorage.getItem(CODING_MODE_KEY)
+    const v = localStorage.getItem(CODING_MODE_KEY) ?? localStorage.getItem('ada-coding-mode-enabled')
     if (v === '0') return false
     if (v === '1') return true
   } catch {
@@ -616,11 +616,11 @@ function readStoredCodingMode() {
   return true
 }
 
-const COLOR_SCHEME_KEY = 'ada-color-scheme'
+const COLOR_SCHEME_KEY = 'jarvis-color-scheme'
 
 function readStoredColorScheme() {
   try {
-    const v = localStorage.getItem(COLOR_SCHEME_KEY)
+    const v = localStorage.getItem(COLOR_SCHEME_KEY) ?? localStorage.getItem('ada-color-scheme')
     if (v === 'light' || v === 'dark') return v
   } catch {
     /* ignore */
@@ -628,13 +628,13 @@ function readStoredColorScheme() {
   return 'dark'
 }
 
-const TERMINAL_EXPANDED_KEY = 'ada-terminal-expanded'
+const TERMINAL_EXPANDED_KEY = 'jarvis-terminal-expanded'
 
 /** VS Code–style host shell strip: one-line collapsed bar; expand for output + single-line input (uses POST /tools/shell). */
 function ChatTerminalPanel() {
   const [expanded, setExpanded] = useState(() => {
     try {
-      return localStorage.getItem(TERMINAL_EXPANDED_KEY) === '1'
+      return (localStorage.getItem(TERMINAL_EXPANDED_KEY) ?? localStorage.getItem('ada-terminal-expanded')) === '1'
     } catch {
       return false
     }
@@ -805,7 +805,7 @@ function App() {
   /** Screenshots arrive on WebSocket; SSE step may arrive first or second — stash by step id */
   const screenshotPendingRef = useRef({})
   const wsRef = useRef(null)
-  const streamAdaStripRef = useRef('')
+  const streamJarvisStripRef = useRef('')
   const messagesEndRef = useRef(null)
   const fileInputRef = useRef(null)
   const projectFolderInputRef = useRef(null)
@@ -820,28 +820,28 @@ function App() {
   const slashUiRef = useRef(null)
   const [webSearchMode, setWebSearchMode] = useState(() => {
     try {
-      return sessionStorage.getItem('ada-web-search-mode') === '1'
+      return sessionStorage.getItem('jarvis-web-search-mode') === '1' || sessionStorage.getItem('ada-web-search-mode') === '1'
     } catch {
       return false
     }
   })
   const [workspaceLocalLabel, setWorkspaceLocalLabel] = useState(() => {
     try {
-      return sessionStorage.getItem('ada-workspace-local-label') || ''
+      return sessionStorage.getItem('jarvis-workspace-local-label') || sessionStorage.getItem('ada-workspace-local-label') || ''
     } catch {
       return ''
     }
   })
   const [workspaceSnapshot, setWorkspaceSnapshot] = useState(() => {
     try {
-      return sessionStorage.getItem('ada-workspace-snapshot') || ''
+      return sessionStorage.getItem('jarvis-workspace-snapshot') || sessionStorage.getItem('ada-workspace-snapshot') || ''
     } catch {
       return ''
     }
   })
   const [workspaceRelPaths, setWorkspaceRelPaths] = useState(() => {
     try {
-      const raw = sessionStorage.getItem('ada-workspace-paths')
+      const raw = sessionStorage.getItem('jarvis-workspace-paths') || sessionStorage.getItem('ada-workspace-paths')
       const parsed = raw ? JSON.parse(raw) : null
       return Array.isArray(parsed) ? parsed : []
     } catch {
@@ -851,7 +851,7 @@ function App() {
   const [projectImportBusy, setProjectImportBusy] = useState(false)
   const [codingModeEnabled, setCodingModeEnabled] = useState(readStoredCodingMode)
   const [filePreview, setFilePreview] = useState(null)
-  /** Pending ```ada-file``` edits from last assistant turn (review before apply). */
+  /** Pending ```jarvis-file``` edits from last assistant turn (review before apply). */
   const [pendingWorkspaceEdits, setPendingWorkspaceEdits] = useState(null)
   const [workspaceReviewFileIndex, setWorkspaceReviewFileIndex] = useState(0)
   /** Paths removed from the review queue (kept/discarded) so the right-rail cards stay in sync. */
@@ -1974,6 +1974,10 @@ function App() {
             if (p.chat_id && currentChatIdRef.current && p.chat_id !== currentChatIdRef.current) return
             if (p.run_id && lastRunIdRef.current && p.run_id !== lastRunIdRef.current) return
             const step = p.step
+            if (!lastRunIdRef.current && p.screenshot) {
+              screenshotPendingRef.current[step] = p.screenshot
+              return
+            }
             setStreamTimeline((prev) => {
               const i = prev.findIndex((x) => x.kind === 'step' && x.step === step)
               if (i >= 0) {
@@ -2007,7 +2011,11 @@ function App() {
     })()
     return () => {
       cancelled = true
-      if (ws) ws.close()
+      try {
+        (wsRef.current || ws)?.close()
+      } catch {
+        /* ignore */
+      }
       wsRef.current = null
     }
   }, [])
@@ -2086,8 +2094,8 @@ function App() {
     setWebSearchMode((m) => {
       const next = !m
       try {
-        if (next) sessionStorage.setItem('ada-web-search-mode', '1')
-        else sessionStorage.removeItem('ada-web-search-mode')
+        if (next) sessionStorage.setItem('jarvis-web-search-mode', '1')
+        else sessionStorage.removeItem('jarvis-web-search-mode')
       } catch {
         /* ignore */
       }
@@ -2098,22 +2106,22 @@ function App() {
 
   const persistLocalProject = (label, snapshot, relPaths = []) => {
     try {
-      localStorage.removeItem('ada-workspace-folder')
-      sessionStorage.removeItem('ada-workspace-folder')
-      sessionStorage.removeItem('ada-coding-project-path')
-      sessionStorage.removeItem('ada-coding-project-mode')
-      sessionStorage.setItem('ada-workspace-local-label', label)
-      sessionStorage.setItem('ada-workspace-snapshot', snapshot)
+      localStorage.removeItem('jarvis-workspace-folder')
+      sessionStorage.removeItem('jarvis-workspace-folder')
+      sessionStorage.removeItem('jarvis-coding-project-path')
+      sessionStorage.removeItem('jarvis-coding-project-mode')
+      sessionStorage.setItem('jarvis-workspace-local-label', label)
+      sessionStorage.setItem('jarvis-workspace-snapshot', snapshot)
       const pathsJson = JSON.stringify(Array.isArray(relPaths) ? relPaths : [])
-      sessionStorage.setItem('ada-workspace-paths', pathsJson)
+      sessionStorage.setItem('jarvis-workspace-paths', pathsJson)
       setWorkspaceLocalLabel(label)
       setWorkspaceSnapshot(snapshot)
       setWorkspaceRelPaths(Array.isArray(relPaths) ? relPaths : [])
     } catch (e) {
       try {
-        sessionStorage.removeItem('ada-workspace-snapshot')
-        sessionStorage.removeItem('ada-workspace-local-label')
-        sessionStorage.removeItem('ada-workspace-paths')
+        sessionStorage.removeItem('jarvis-workspace-snapshot')
+        sessionStorage.removeItem('jarvis-workspace-local-label')
+        sessionStorage.removeItem('jarvis-workspace-paths')
       } catch {
         /* ignore */
       }
@@ -2141,13 +2149,13 @@ function App() {
     setWorkspaceSnapshot('')
     setWorkspaceRelPaths([])
     try {
-      localStorage.removeItem('ada-workspace-folder')
-      sessionStorage.removeItem('ada-workspace-folder')
-      sessionStorage.removeItem('ada-workspace-snapshot')
-      sessionStorage.removeItem('ada-workspace-local-label')
-      sessionStorage.removeItem('ada-workspace-paths')
-      sessionStorage.removeItem('ada-coding-project-path')
-      sessionStorage.removeItem('ada-coding-project-mode')
+      localStorage.removeItem('jarvis-workspace-folder')
+      sessionStorage.removeItem('jarvis-workspace-folder')
+      sessionStorage.removeItem('jarvis-workspace-snapshot')
+      sessionStorage.removeItem('jarvis-workspace-local-label')
+      sessionStorage.removeItem('jarvis-workspace-paths')
+      sessionStorage.removeItem('jarvis-coding-project-path')
+      sessionStorage.removeItem('jarvis-coding-project-mode')
     } catch {
       /* ignore */
     }
@@ -2157,7 +2165,7 @@ function App() {
     if (!workspaceSnapshot.trim() || !workspaceLocalLabel.trim()) return
     if (workspaceRelPaths.length > 0) return
     try {
-      const raw = sessionStorage.getItem('ada-workspace-paths')
+      const raw = sessionStorage.getItem('jarvis-workspace-paths')
       const parsed = raw ? JSON.parse(raw) : null
       if (Array.isArray(parsed) && parsed.length > 0) return
     } catch {
@@ -2167,7 +2175,7 @@ function App() {
     if (parsed.length) {
       setWorkspaceRelPaths(parsed)
       try {
-        sessionStorage.setItem('ada-workspace-paths', JSON.stringify(parsed))
+        sessionStorage.setItem('jarvis-workspace-paths', JSON.stringify(parsed))
       } catch {
         /* ignore */
       }
@@ -2470,16 +2478,29 @@ function App() {
       } catch {
         /* ignore */
       }
+      const ac = new AbortController()
+      abortRef.current = ac
+      sendingRef.current = true
+      setSending(true)
       try {
-        const reply = await chatbotResponse(
+        const data = await chatbotResponse(
           `Side question (do not start an agent plan; answer only):\n${q}`,
+          null,
+          null,
+          ac.signal,
         )
+        if (data?.run_id) lastRunIdRef.current = data.run_id
+        const reply = typeof data === 'string' ? data : data?.reply
         const body = `**Side note** (main task unchanged)\n\n${reply || '(no reply)'}`
         appendMessage(body, false)
         await appendChatLog('assistant', body)
       } catch (e) {
-        appendMessage(e?.message || 'Side question failed.', false)
+        const aborted = e?.name === 'AbortError' || /aborted/i.test(e?.message || '')
+        appendMessage(aborted ? 'Stopped.' : e?.message || 'Side question failed.', false)
       }
+      abortRef.current = null
+      sendingRef.current = false
+      setSending(false)
       refreshChatList()
       return
     }
@@ -2683,7 +2704,7 @@ function App() {
     abortRef.current = ac
     lastRunIdRef.current = null
     setLiveReply('')
-    streamAdaStripRef.current = ''
+    streamJarvisStripRef.current = ''
     setStreamTimeline([])
     setLivePlan([])
     screenshotPendingRef.current = {}
@@ -2702,7 +2723,7 @@ function App() {
       }
       let reply
       if (filesToSend.length > 0) {
-        reply = await sendMessageWithFiles(
+        const fileResult = await sendMessageWithFiles(
           raw || 'Please summarize or answer based on the attached documents.',
           filesToSend,
           chatId,
@@ -2711,7 +2732,10 @@ function App() {
           projectContextActive ? cSnap || null : null,
           activeAgentId || null,
           ac.signal,
+          opts.resumeTaskId || null,
         )
+        if (fileResult?.run_id) lastRunIdRef.current = fileResult.run_id
+        reply = typeof fileResult === 'string' ? fileResult : fileResult?.reply
         appendMessage(reply, false)
         await appendChatLog('assistant', reply, chatId)
       } else {
@@ -2764,8 +2788,8 @@ function App() {
             resumeTaskId: opts.resumeTaskId || null,
             onUsage: (u) => setLiveUsage(u),
             onChunk: (delta) => {
-              streamAdaStripRef.current += delta
-              setLiveReply(stripJarvisFileFencesForDisplay(streamAdaStripRef.current))
+              streamJarvisStripRef.current += delta
+              setLiveReply(stripJarvisFileFencesForDisplay(streamJarvisStripRef.current))
             },
             onStatus: (d) => {
               if (d.phase === 'done') return
@@ -3264,7 +3288,7 @@ function App() {
                   type="button"
                   className="workspace-file-review__btn workspace-file-review__btn--accent"
                   onClick={async () => {
-                    await resolveAgentApproval(p.id, true)
+                    await resolveAgentApproval(p.id, true, currentChatId)
                     refreshPendingApprovals()
                   }}
                 >
@@ -3274,7 +3298,7 @@ function App() {
                   type="button"
                   className="workspace-file-review__btn workspace-file-review__btn--ghost"
                   onClick={async () => {
-                    await resolveAgentApproval(p.id, false)
+                    await resolveAgentApproval(p.id, false, currentChatId)
                     refreshPendingApprovals()
                   }}
                 >

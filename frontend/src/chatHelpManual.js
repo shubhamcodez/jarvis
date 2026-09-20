@@ -39,7 +39,7 @@ export const CHAT_HELP_MANUAL_MARKDOWN = `
 | \`/cd [path]\` | Show or relink the project workspace. |
 | \`/effort low\\|medium\\|high\` | Spend cap per run (20k / 80k / 200k tokens). |
 | Mermaid fences | \`\`\`mermaid graph/flowchart blocks render locally; other diagram types show a fallback. |
-| HTML / SVG fences | Assistant \`html\` / \`svg\` blocks (or \`ADA_PREVIEW_*\` from the sandbox) render as a sandboxed live preview. |
+| HTML / SVG fences | Assistant \`html\` / \`svg\` blocks (or \`JARVIS_PREVIEW_*\` from the sandbox) render as a sandboxed live preview. |
 | \`/stop\` | Cancel the current run. |
 | \`remember …\` | Store an exact fact (decays if unused). |
 
@@ -57,8 +57,8 @@ Above the composer: **Plan** (no writes), **Draft** (approve every write), **Age
 - **Pin** on a reply — Save it in Activity.
 - Search chats from the Chats menu.
 
-Project rules: if a folder is linked, Jarvis reads \`ADA.md\`, \`AGENTS.md\`, \`CLAUDE.md\`, or \`.ada/rules.md\`.
-Workspace skills: \`SKILL.md\` files under \`.agents/skills/\`, \`.ada/skills/\`, \`.cursor/skills/\`, or \`.claude/skills/\` (names always listed; full playbook loads when relevant).
+Project rules: if a folder is linked, Jarvis reads \`JARVIS.md\`, \`AGENTS.md\`, \`CLAUDE.md\`, or \`.jarvis/rules.md\` (legacy \`ADA.md\` / \`.ada/\` still load).
+Workspace skills: \`SKILL.md\` files under \`.agents/skills/\`, \`.jarvis/skills/\`, \`.ada/skills/\`, \`.cursor/skills/\`, or \`.claude/skills/\` (names always listed; full playbook loads when relevant).
 Thumbs on a reply store a lightweight signal (👎 also writes a short memory note). Say \`implement #64\` to fetch a GitHub issue via \`gh\`.
 - Use the **+** button to attach files or toggle **Web search** (when on, your message is also used as a search query unless you use the web-search flow from the menu).
 

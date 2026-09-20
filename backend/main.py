@@ -316,7 +316,7 @@ def _sse_data(obj: dict) -> str:
 
 
 def _strip_workspace_edits_from_reply(reply: str) -> tuple[str, list | None]:
-    """Remove ```ada-file:...``` blocks from visible reply; return pending edits for UI."""
+    """Remove ```jarvis-file:...``` blocks from visible reply; return pending edits for UI."""
     clean, edits = extract_workspace_file_edits(reply or "")
     return clean, edits if edits else None
 
@@ -577,6 +577,7 @@ class WorkspaceWriteRequest(BaseModel):
 class AgentApproveRequest(BaseModel):
     approval_id: str
     approve: bool = True
+    chat_id: Optional[str] = None
 
 
 def _trace_extra(result: dict | None) -> dict:
@@ -714,6 +715,10 @@ async def send_message(body: SendMessageRequest, request: Request):
     chat_id = body.chat_id
 
     if chat_id and is_feedback_complaint(message):
+        from agents.run_control import finish_run, start_run
+
+        fb_run = start_run(chat_id=chat_id or "", task_id="")
+        fb_id = fb_run.get("run_id")
         t_fb = time.perf_counter()
         try:
             result = await asyncio.to_thread(run_feedback_assessment, chat_id, provider)
@@ -728,8 +733,10 @@ async def send_message(body: SendMessageRequest, request: Request):
                 duration_sec=time.perf_counter() - t_fb,
             )
             schedule_post_turn_observability()
-            return {"reply": reply, "tool_used": None}
+            finish_run(fb_id)
+            return {"reply": reply, "tool_used": None, "run_id": fb_id}
         except Exception as e:
+            finish_run(fb_id, "error")
             trace_log(
                 provider=provider,
                 route="feedback_assess",
@@ -1077,10 +1084,10 @@ async def send_message_stream(body: SendMessageRequest, request: Request):
                 "\n\n## Project workspace (linked folder)\n"
                 "The client sends a snapshot of the user's **currently open folder**. When they ask you to fix, implement, "
                 "or refactor **project** code, output each updated file as a markdown code fence whose **first line** is "
-                "exactly `ada-file:relative/path/from/root.ext` (then a newline), then the **complete** new file contents "
+                "exactly `jarvis-file:relative/path/from/root.ext` (then a newline), then the **complete** new file contents "
                 "(full file, not a patch), then a closing line ` ``` ` (three backticks) alone. "
                 "Use forward slashes; one fence per file. The UI shows a diff and applies changes on the user's machine. "
-                "Other code fences are for examples only; only `ada-file:` openers become pending workspace edits."
+                "Other code fences are for examples only; only `jarvis-file:` openers become pending workspace edits."
             )
             sys_final = (sys_final + inj) if sys_final else inj.strip()
         try:
@@ -1116,7 +1123,7 @@ async def send_message_stream(body: SendMessageRequest, request: Request):
                 )
                 schedule_post_turn_observability()
                 yield f"data: {json.dumps({'delta': reply_md})}\n\n"
-                yield f"data: {json.dumps({'done': True, 'reply': reply_md})}\n\n"
+                yield f"data: {json.dumps({'done': True, 'reply': reply_md, 'run_id': stream_run_id})}\n\n"
             except Exception as e:
                 err = str(e)
                 trace_log(
@@ -1130,7 +1137,7 @@ async def send_message_stream(body: SendMessageRequest, request: Request):
                 )
                 fallback = f"Sorry, feedback review failed: {err}"
                 yield f"data: {json.dumps({'delta': fallback})}\n\n"
-                yield f"data: {json.dumps({'done': True, 'reply': fallback})}\n\n"
+                yield f"data: {json.dumps({'done': True, 'reply': fallback, 'run_id': stream_run_id})}\n\n"
             finish_run(stream_run_id)
             return
 
@@ -1478,7 +1485,7 @@ async def send_message_stream(body: SendMessageRequest, request: Request):
             payload["run_id"] = stream_run_id
         if isinstance(result, dict) and result.get("task_id"):
             payload["task_id"] = result.get("task_id")
-        finish_run(result.get("run_id") if isinstance(result, dict) else stream_run_id)
+        finish_run(stream_run_id)
         yield f"data: {json.dumps(payload)}\n\n"
 
     async def _guarded_stream():
@@ -1514,9 +1521,19 @@ async def send_message_stream(body: SendMessageRequest, request: Request):
 # --- Chat log ---
 @app.post("/chat/append")
 async def api_append_chat_log(body: AppendChatLogRequest):
+    role = (body.role or "").strip()
+    if role not in ("user", "assistant", "tool"):
+        raise HTTPException(status_code=400, detail="role must be user, assistant, or tool")
+    content = body.content or ""
+    if len(content) > 100_000:
+        raise HTTPException(status_code=400, detail="content too long")
+    if body.chat_id:
+        _require_chat_id(body.chat_id)
     try:
-        append_chat_log(body.role, body.content, chat_id=body.chat_id)
+        append_chat_log(role, content, chat_id=body.chat_id)
     except InvalidChatId as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {}
 
@@ -1812,6 +1829,13 @@ class UserProfilePayload(BaseModel):
 @app.post("/memory/ingest")
 async def api_memory_ingest(body: IngestChatRequest):
     """Ingest a chat's history into the vector store for retrieval."""
+    from observability.rate_limit import allow as rate_allow
+
+    if not rate_allow("memory.ingest", limit=4, window_sec=20.0):
+        raise HTTPException(status_code=429, detail="Memory ingest is rate-limited.")
+    _require_chat_id(body.chat_id)
+    if not chat_exists(body.chat_id):
+        raise HTTPException(status_code=404, detail="unknown chat")
     try:
         api_key = get_openai_api_key()
     except Exception:
@@ -2123,7 +2147,7 @@ async def api_agent_pending(chat_id: Optional[str] = None):
 async def api_agent_approve(body: AgentApproveRequest):
     from agents.hitl import resolve_approval
 
-    return resolve_approval(body.approval_id, bool(body.approve))
+    return resolve_approval(body.approval_id, bool(body.approve), chat_id=body.chat_id)
 
 
 @app.get("/tasks")
@@ -2395,7 +2419,11 @@ async def api_feedback_assess(body: FeedbackAssessRequest):
 @app.post("/observability/evals/generate")
 async def api_generate_evals(num_traces: int = 30, num_cases: int = 5):
     """Generate multi-turn eval cases from recent trace logs (LLM-based)."""
-    cases = generate_evals_from_logs(num_traces=num_traces, num_cases=num_cases)
+    from observability.rate_limit import allow as rate_allow
+
+    if not rate_allow("obs.evals.generate", limit=2, window_sec=30.0):
+        raise HTTPException(status_code=429, detail="Eval generate is rate-limited.")
+    cases = await asyncio.to_thread(generate_evals_from_logs, num_traces=num_traces, num_cases=num_cases)
     return {"generated": len(cases), "cases": [c.to_dict() for c in cases]}
 
 
@@ -2407,7 +2435,11 @@ async def api_get_eval_cases(limit: int = 100):
 @app.post("/observability/evals/run")
 async def api_run_evals(case_limit: int = 20):
     """Run eval cases for all models (openai, xai); record pass@k."""
-    runs = run_evals_for_all_models(case_limit=case_limit)
+    from observability.rate_limit import allow as rate_allow
+
+    if not rate_allow("obs.evals.run", limit=2, window_sec=60.0):
+        raise HTTPException(status_code=429, detail="Eval run is rate-limited.")
+    runs = await asyncio.to_thread(run_evals_for_all_models, case_limit=case_limit)
     by_provider = pass_at_k([r.to_dict() for r in runs])
     return {"runs": len(runs), "pass_at_1": by_provider}
 
@@ -2427,13 +2459,21 @@ async def api_get_optimization():
 @app.post("/observability/optimization/run")
 async def api_run_optimization():
     """Aggregate traces + eval runs, compute per-model stats and suggestions."""
-    return run_optimization_step()
+    from observability.rate_limit import allow as rate_allow
+
+    if not rate_allow("obs.optimize", limit=2, window_sec=30.0):
+        raise HTTPException(status_code=429, detail="Optimization is rate-limited.")
+    return await asyncio.to_thread(run_optimization_step)
 
 
 @app.post("/observability/human-eval")
 async def api_human_eval(max_problems: int = 5):
     """Run HumanEval benchmark for each model (optional; needs datasets)."""
-    return run_human_eval_benchmark(max_problems=max_problems)
+    from observability.rate_limit import allow as rate_allow
+
+    if not rate_allow("obs.human_eval", limit=1, window_sec=60.0):
+        raise HTTPException(status_code=429, detail="HumanEval is rate-limited.")
+    return await asyncio.to_thread(run_human_eval_benchmark, max_problems=max_problems)
 
 
 # --- File upload for attachments (web: frontend sends files as multipart) ---
@@ -2446,6 +2486,7 @@ async def send_message_with_files(
     coding_mode: bool = Form(False),
     coding_project_snapshot: Optional[str] = Form(None),
     custom_agent_id: Optional[str] = Form(None),
+    resume_task_id: Optional[str] = Form(None),
     files: list[UploadFile] = File(default=[]),
 ):
     """Accept multipart form: message + files. Saves files to temp and calls send_message."""
@@ -2476,6 +2517,7 @@ async def send_message_with_files(
             coding_mode=bool(coding_mode),
             coding_project_snapshot=(coding_project_snapshot or "").strip() or None,
             custom_agent_id=(custom_agent_id or "").strip() or None,
+            resume_task_id=(resume_task_id or "").strip() or None,
         )
         result = await send_message(body, request)
         return result
@@ -2599,6 +2641,10 @@ async def api_tools_python_sandbox(body: PythonSandboxRequest):
     Execute Python in a sandboxed child process (timeout, restricted imports/builtins).
     For agents/models: prefer this over exec on the server process.
     """
+    from observability.rate_limit import allow as rate_allow
+
+    if not rate_allow("tools.sandbox", limit=8, window_sec=15.0):
+        raise HTTPException(status_code=429, detail="Sandbox is rate-limited. Try again shortly.")
     result = await asyncio.to_thread(run_sandboxed_python, body.code, body.timeout_sec)
     if isinstance(result, dict):
         return redact_sandbox_result_dict(result)
@@ -2618,13 +2664,25 @@ async def api_tools_shell(body: ShellRunRequest):
         )
     if in_quiet_hours():
         raise HTTPException(status_code=403, detail="Quiet hours are enabled; shell is paused.")
-    from agents.hitl import maybe_gate_shell
+    from observability.rate_limit import allow as rate_allow
 
-    result = await asyncio.to_thread(
-        maybe_gate_shell,
-        body.command,
-        execute=lambda: run_shell_command(body.command, body.timeout_sec),
-    )
+    if not rate_allow("tools.shell", limit=6, window_sec=15.0):
+        raise HTTPException(status_code=429, detail="Shell is rate-limited. Try again shortly.")
+    from agents.hitl import maybe_gate_shell
+    from agents.run_control import finish_run, start_run
+
+    rec = start_run(chat_id="", task_id="")
+    rid = rec.get("run_id")
+    try:
+        result = await asyncio.to_thread(
+            maybe_gate_shell,
+            body.command,
+            execute=lambda: run_shell_command(body.command, body.timeout_sec, run_id=rid),
+        )
+    finally:
+        from agents.run_control import is_cancelled
+
+        finish_run(rid, "cancelled" if is_cancelled(rid) else "complete")
     return result
 
 

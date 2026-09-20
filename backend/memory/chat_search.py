@@ -85,8 +85,8 @@ def recap_markdown(chat_id: str, extra: str = "") -> str:
     for m in msgs[-40:]:
         text = m.get("content") or ""
         for line in text.splitlines():
-            if "```ada-file:" in line:
-                files.append(line.split("```ada-file:", 1)[-1].strip())
+            if "```jarvis-file:" in line or "```ada-file:" in line:
+                files.append(line.split("-file:", 1)[-1].strip())
     files = list(dict.fromkeys(files))[:12]
     lines = [
         "# Recap",

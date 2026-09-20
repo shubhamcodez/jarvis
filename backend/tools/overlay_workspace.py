@@ -45,7 +45,7 @@ def resolve_under(root: Path, rel_path: str) -> Path:
 
 
 class OverlayWorkspace:
-    """Read-through filesystem with in-memory writes, deletes, and ada-file export."""
+    """Read-through filesystem with in-memory writes, deletes, and jarvis-file export."""
 
     def __init__(self, root: str | Path):
         self.root = Path(root).expanduser().resolve()
@@ -160,7 +160,7 @@ class OverlayWorkspace:
             body = self.files[rel]
             if not body.endswith("\n"):
                 body += "\n"
-            blocks.append(f"```ada-file:{rel}\n{body}```")
+            blocks.append(f"```jarvis-file:{rel}\n{body}```")
         return "\n\n".join(blocks)
 
     def tree_summary(self, max_files: int = 200) -> str:

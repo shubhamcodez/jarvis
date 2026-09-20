@@ -226,11 +226,15 @@ def list_pending(chat_id: Optional[str] = None) -> list[dict[str, Any]]:
         return sorted(items, key=lambda x: x.get("created_at") or 0)
 
 
-def resolve_approval(approval_id: str, approve: bool) -> dict[str, Any]:
+def resolve_approval(approval_id: str, approve: bool, *, chat_id: Optional[str] = None) -> dict[str, Any]:
     with _LOCK:
         rec = _PENDING.get(approval_id)
         if not rec:
             return {"ok": False, "error": "unknown_approval"}
+        rec_chat = rec.get("chat_id") or ""
+        want = (chat_id or "").strip()
+        if want and rec_chat and rec_chat != want:
+            return {"ok": False, "error": "approval_chat_mismatch"}
         if rec.get("status") != "pending":
             return {"ok": False, "error": "already_resolved", "status": rec.get("status")}
         fn = rec.get("_execute")

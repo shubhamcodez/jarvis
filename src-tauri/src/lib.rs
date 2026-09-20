@@ -43,6 +43,9 @@ fn sidecar_exe(app: &tauri::AppHandle) -> Option<PathBuf> {
             res.join("jarvis-backend.exe"),
             res.join("binaries").join("jarvis-backend.exe"),
             res.join("jarvis-backend"),
+            res.join("ada-backend.exe"),
+            res.join("binaries").join("ada-backend.exe"),
+            res.join("ada-backend"),
         ];
         for c in candidates {
             if c.exists() {
@@ -51,9 +54,11 @@ fn sidecar_exe(app: &tauri::AppHandle) -> Option<PathBuf> {
         }
     }
     if let Ok(exe) = app.path().executable_dir() {
-        let c = exe.join("jarvis-backend.exe");
-        if c.exists() {
-            return Some(c);
+        for name in ["jarvis-backend.exe", "ada-backend.exe"] {
+            let c = exe.join(name);
+            if c.exists() {
+                return Some(c);
+            }
         }
     }
     None
@@ -140,7 +145,15 @@ fn api_token_path(packaged: bool) -> PathBuf {
 
 fn read_api_token() -> String {
     let packaged = !cfg!(debug_assertions);
-    std::fs::read_to_string(api_token_path(packaged))
+    let primary = api_token_path(packaged);
+    if let Ok(t) = std::fs::read_to_string(&primary) {
+        let t = t.trim().to_string();
+        if !t.is_empty() {
+            return t;
+        }
+    }
+    let legacy = primary.with_file_name("ada-api-token");
+    std::fs::read_to_string(legacy)
         .unwrap_or_default()
         .trim()
         .to_string()

@@ -19,7 +19,7 @@ npm run tauri:dev
 
 Browser-only (no Tauri): `npm run dev:all` then open http://localhost:5173.
 
-## Installer (`Ada_*_x64-setup.exe`)
+## Installer (`Jarvis_*_x64-setup.exe`)
 
 On a Windows build machine:
 
@@ -27,7 +27,7 @@ On a Windows build machine:
 powershell -ExecutionPolicy Bypass -File scripts/build-windows.ps1
 ```
 
-Output: `src-tauri/target/release/bundle/nsis/Ada_0.1.0_x64-setup.exe`
+Output: `src-tauri/target/release/bundle/nsis/Jarvis_0.1.0_x64-setup.exe`
 
 The installer does **not** require Python, Poetry, or Node. First launch: Settings → paste API keys (stored in `%APPDATA%\Jarvis\.env`).
 

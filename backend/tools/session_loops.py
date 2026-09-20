@@ -121,14 +121,26 @@ def _fire(item: dict[str, Any]) -> None:
         if in_quiet_hours():
             append_chat_log("assistant", "**Loop** skipped (quiet hours).", chat_id)
             return
+        from agents.run_control import finish_run, start_run, stop_reason
+
+        rec = start_run(chat_id=str(chat_id), task_id="")
+        rid = rec.get("run_id")
+        halt = stop_reason(rid)
+        if halt:
+            finish_run(rid, "cancelled")
+            append_chat_log("assistant", f"**Loop** {halt}", chat_id)
+            return
         client = get_llm_client(get_llm_provider())
-        reply = client.chat(
-            get_llm_api_key(),
-            f"Loop check-in (short status only; do not start an agent plan):\n{prompt}",
-            None,
-            None,
-            "You are Jarvis doing a scheduled check-in. Reply in at most 6 lines.",
-        )
+        try:
+            reply = client.chat(
+                get_llm_api_key(),
+                f"Loop check-in (short status only; do not start an agent plan):\n{prompt}",
+                None,
+                None,
+                "You are Jarvis doing a scheduled check-in. Reply in at most 6 lines.",
+            )
+        finally:
+            finish_run(rid, "cancelled" if stop_reason(rid) else "complete")
         extra = ""
         low = (prompt or "").lower()
         if any(w in low for w in ("test", "pytest", "npm test", "cargo test", "go test", "run_tests")):

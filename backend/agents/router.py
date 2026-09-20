@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from typing import Callable, Literal, Optional
 
 from langgraph.graph import END, StateGraph
@@ -74,7 +75,11 @@ async def _supervisor_node(state: RouterState) -> RouterState:
 
         task = get_task(resume_id)
         if task:
-            ast = resume_run(state.get("chat_id") or task.get("chat_id"), task)
+            ast = resume_run(
+                state.get("chat_id") or task.get("chat_id"),
+                task,
+                preferred_run_id=state.get("run_id"),
+            )
             from agents.tasks import remaining_plan
 
             leftover = remaining_plan(task)
@@ -92,15 +97,20 @@ async def _supervisor_node(state: RouterState) -> RouterState:
         ast = load_state(state.get("chat_id"))
     if agents or decision.get("run_agent"):
         try:
-            from agents.run_control import start_run
+            from agents.run_control import get_run, start_run
 
-            start_run(
-                chat_id=state.get("chat_id") or "",
-                task_id=ast.get("task_id") or "",
-                run_id=ast.get("run_id"),
-            )
+            rid = ast.get("run_id")
+            rec = get_run(rid) if rid else None
+            if rec and rec.get("status") == "cancelled":
+                pass
+            else:
+                start_run(
+                    chat_id=state.get("chat_id") or "",
+                    task_id=ast.get("task_id") or "",
+                    run_id=rid,
+                )
         except Exception:
-            pass
+            logging.getLogger("jarvis.router").warning("start_run attach failed", exc_info=True)
     return {
         "supervisor_decision": decision,
         "goal": goal,

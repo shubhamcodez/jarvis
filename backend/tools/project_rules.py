@@ -1,4 +1,4 @@
-"""Load project instruction files (ADA.md / AGENTS.md / CLAUDE.md) into context."""
+"""Load project instruction files (JARVIS.md / AGENTS.md / CLAUDE.md) into context."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -6,9 +6,12 @@ from pathlib import Path
 from config import get_workspace_root
 
 _RULE_NAMES = (
-    "ADA.md",
+    "JARVIS.md",
     "AGENTS.md",
     "CLAUDE.md",
+    ".jarvis/rules.md",
+    ".jarvis/JARVIS.md",
+    "ADA.md",
     ".ada/rules.md",
     ".ada/ADA.md",
 )

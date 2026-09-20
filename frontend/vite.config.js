@@ -7,12 +7,15 @@ import { fileURLToPath } from 'node:url'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
-function adaTokenPath() {
-  return path.resolve(__dirname, '..', '.secrets', 'jarvis-api-token')
+function jarvisTokenPath() {
+  const root = path.resolve(__dirname, '..', '.secrets')
+  const brand = path.join(root, 'jarvis-api-token')
+  const legacy = path.join(root, 'ada-api-token')
+  return fs.existsSync(brand) || !fs.existsSync(legacy) ? brand : legacy
 }
 
-function ensureAdaToken() {
-  const p = adaTokenPath()
+function ensureJarvisToken() {
+  const p = jarvisTokenPath()
   try {
     if (fs.existsSync(p)) {
       const t = fs.readFileSync(p, 'utf8').trim()
@@ -27,8 +30,8 @@ function ensureAdaToken() {
   }
 }
 
-function injectAdaToken(proxyReq) {
-  const t = ensureAdaToken()
+function injectJarvisToken(proxyReq) {
+  const t = ensureJarvisToken()
   if (t) proxyReq.setHeader('X-Jarvis-Token', t)
 }
 
@@ -43,15 +46,15 @@ export default defineConfig({
         changeOrigin: true,
         rewrite: (p) => p.replace(/^\/api/, ''),
         configure: (proxy) => {
-          proxy.on('proxyReq', injectAdaToken)
+          proxy.on('proxyReq', injectJarvisToken)
         },
       },
       '/ws': {
         target: 'http://127.0.0.1:8000',
         ws: true,
         configure: (proxy) => {
-          proxy.on('proxyReq', injectAdaToken)
-          proxy.on('proxyReqWs', injectAdaToken)
+          proxy.on('proxyReq', injectJarvisToken)
+          proxy.on('proxyReqWs', injectJarvisToken)
         },
       },
     },

@@ -47,8 +47,14 @@ def _should_ingest(chat_id: str, force: bool) -> bool:
         last = _LAST_INGEST.get(chat_id, 0.0)
         if now - last < _DEBOUNCE_SEC:
             return False
-        _LAST_INGEST[chat_id] = now
         return True
+
+
+def _mark_ingested(chat_id: str) -> None:
+    if not chat_id:
+        return
+    with _INGEST_LOCK:
+        _LAST_INGEST[chat_id] = time.time()
 
 
 def write_back_turn(
@@ -86,6 +92,7 @@ def write_back_turn(
         store = get_memory_store()
         out["chunks_added"] = ingest_chat(store, openai_api_key, chat_id, persist=True, only_new=True)
         out["ingested"] = True
+        _mark_ingested(chat_id)
         try:
             from observability.metrics import incr, observe
 
@@ -106,6 +113,7 @@ def schedule_write_back(
     assistant_reply: str = "",
 ) -> None:
     """Fire-and-forget write-back. Never blocks the caller."""
+    rid = None
     try:
         from agents.run_control import current_run_id, is_cancelled
 
@@ -113,7 +121,7 @@ def schedule_write_back(
         if rid and is_cancelled(rid):
             return
     except Exception:
-        pass
+        rid = None
     try:
         from config import get_openai_api_key
 
@@ -127,12 +135,11 @@ def schedule_write_back(
             except Exception:
                 key = None
 
-        def _run() -> None:
+        def _run(bound_rid=rid) -> None:
             try:
-                from agents.run_control import current_run_id, is_cancelled
+                from agents.run_control import is_cancelled
 
-                rid = current_run_id()
-                if rid and is_cancelled(rid):
+                if bound_rid and is_cancelled(bound_rid):
                     return
             except Exception:
                 pass

@@ -10,6 +10,7 @@ from tools.skills import _parse_frontmatter, discover_skills
 
 COMMAND_DIRS = (
     ".agents/commands",
+    ".jarvis/commands",
     ".ada/commands",
     ".cursor/commands",
     ".claude/commands",

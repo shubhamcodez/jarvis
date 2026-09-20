@@ -23,8 +23,8 @@ Output ONLY a JSON object, no markdown fences, with exactly one key:
 
 Rules for the code:
 - Allowed imports (stdlib + sandbox): math, json, itertools, functools, collections, statistics, datetime, decimal, fractions, string, random, re, operator, copy, io, base64, csv, hashlib, typing, warnings, plus **numpy**, **pandas**, **matplotlib**, **yfinance** and their usual dependencies (already whitelisted).
-- **Matplotlib:** call `import matplotlib; matplotlib.use("Agg")` before `pyplot`. To show a chart in the chat UI, save PNG to bytes and print **exactly one line**: `ADA_IMAGE_PNG:` + base64 (no newlines inside), e.g. `print("ADA_IMAGE_PNG:" + base64.b64encode(buf.getvalue()).decode())`. You may print other text before/after on separate lines; those appear as monospace. Raw single-line PNG base64 (starts with `iVBOR`) is also detected.
-- **HTML/SVG/Mermaid preview:** print `ADA_PREVIEW_HTML:<markup>`, `ADA_PREVIEW_SVG:<markup>`, or `ADA_PREVIEW_MERMAID:graph TD; A --> B` on one line (or a ```html / ```svg / ```mermaid fence). The UI shows a sandboxed live preview.
+- **Matplotlib:** call `import matplotlib; matplotlib.use("Agg")` before `pyplot`. To show a chart in the chat UI, save PNG to bytes and print **exactly one line**: `JARVIS_IMAGE_PNG:` + base64 (no newlines inside), e.g. `print("JARVIS_IMAGE_PNG:" + base64.b64encode(buf.getvalue()).decode())`. You may print other text before/after on separate lines; those appear as monospace. Raw single-line PNG base64 (starts with `iVBOR`) is also detected. `ADA_IMAGE_PNG:` is still accepted.
+- **HTML/SVG/Mermaid preview:** print `JARVIS_PREVIEW_HTML:<markup>`, `JARVIS_PREVIEW_SVG:<markup>`, or `JARVIS_PREVIEW_MERMAID:graph TD; A --> B` on one line (or a ```html / ```svg / ```mermaid fence). The UI shows a sandboxed live preview. `ADA_PREVIEW_*` is still accepted.
 - **yfinance:** OK for pulling `Ticker(...).history(...)` or `fast_info` inside your analysis script when the task needs live series.
 - No `open()`, no `os`/`sys`/`subprocess`, no `input()`. Print answers with `print()`.
 - Keep code focused; prefer small readable steps.
@@ -147,7 +147,7 @@ def _propose_workspace_file_fences(
     provider: str,
 ) -> str:
     """
-    LLM pass: emit ```ada-file:...``` blocks with full file bodies. Caller strips fences for chat and sends file_edits to UI.
+    LLM pass: emit ```jarvis-file:...``` blocks with full file bodies. Caller strips fences for chat and sends file_edits to UI.
     """
     ctx = (project_context or "").strip()
     if len(ctx) < _MIN_CTX_FOR_WORKSPACE_PROPOSE:
@@ -163,7 +163,7 @@ def _propose_workspace_file_fences(
         "to their disk.\n\n"
         "**How to output updates (required format):**\n"
         "- For each file you modify or create, output one markdown fence.\n"
-        "- **Opening line** is exactly: ```ada-file:relative/path/from/project/root.ext (then newline). Use forward slashes only.\n"
+        "- **Opening line** is exactly: ```jarvis-file:relative/path/from/project/root.ext (then newline). Use forward slashes only.\n"
         "- Next lines: the **entire** file content after your edits (not a patch, not a snippet—full file).\n"
         "- **Closing line**: ``` (three backticks) alone.\n\n"
         "**Rules:**\n"
@@ -173,15 +173,15 @@ def _propose_workspace_file_fences(
         "appear in the snapshot and integrate edits; do not leave placeholders like TODO unless the user asked for them.\n"
         "- Small, purely informational questions about the repo with **no** requested code change → reply exactly: NO_EDITS\n"
         "- Tasks that are **only** Python/math/plots with no repo edit → NO_EDITS\n"
-        "- Otherwise, when the user wants code/files fixed or added in their project, you **must** output ada-file blocks.\n\n"
-        "Do not wrap ada-file fences inside another outer code fence. No prose before or after the fences except NO_EDITS."
+        "- Otherwise, when the user wants code/files fixed or added in their project, you **must** output jarvis-file blocks.\n\n"
+        "Do not wrap jarvis-file fences inside another outer code fence. No prose before or after the fences except NO_EDITS."
     )
     user = (
         f"## User task (do this in the repo)\n{goal[:4000]}\n\n"
         f"## Repository snapshot (paths + file bodies; use as source of truth)\n{ctx[:20000]}\n\n"
         "## Context from the coding agent turn (may include sandbox output or a short summary)\n"
         f"{(agent_reply or '')[:12000]}\n\n"
-        "Output NO_EDITS or only ```ada-file:...``` fences as specified."
+        "Output NO_EDITS or only ```jarvis-file:...``` fences as specified."
     )
     create_kw: dict = {
         "model": model,
@@ -353,7 +353,7 @@ def run_coding_agent(
         plan = (
             "Plan:\n"
             "  1. Use the repository snapshot (from the user's currently open folder) to find paths and current file bodies.\n"
-            "  2. Emit **complete updated files** as ada-file markdown fences for the in-app diff and apply flow.\n"
+            "  2. Emit **complete updated files** as jarvis-file markdown fences for the in-app diff and apply flow.\n"
             "  3. Skip the Python sandbox—this task does not require executed analysis code.\n"
         )
         if on_step:
@@ -384,7 +384,7 @@ def run_coding_agent(
         return reply, {
             "name": "workspace_file_proposal",
             "input": goal[:4000],
-            "result": "ada-file proposals" if extra else "NO_EDITS",
+            "result": "jarvis-file proposals" if extra else "NO_EDITS",
         }
 
     mod = get_llm_client(provider)
@@ -469,7 +469,7 @@ def run_coding_agent(
         except Exception:
             pass
 
-    result = run_sandboxed_python(code, timeout_sec=45.0)
+    result = run_sandboxed_python(code, timeout_sec=45.0, run_id=run_id)
     if not result.get("ok"):
         fix_msg = (
             "Your previous code failed in the sandbox. Fix it.\n\n"
@@ -486,7 +486,7 @@ def run_coding_agent(
         code2 = _parse_code_from_llm(raw2)
         if code2:
             code = code2
-            result = run_sandboxed_python(code, timeout_sec=45.0)
+            result = run_sandboxed_python(code, timeout_sec=45.0, run_id=run_id)
 
     tool_used = {
         "name": "python_sandbox",

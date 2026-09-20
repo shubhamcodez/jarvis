@@ -17,12 +17,15 @@ from dotenv import load_dotenv
 def is_packaged() -> bool:
     if getattr(sys, "frozen", False):
         return True
-    return os.environ.get("ADA_PACKAGED", "").strip().lower() in ("1", "true", "yes", "on")
+    for key in ("JARVIS_PACKAGED", "ADA_PACKAGED"):
+        if os.environ.get(key, "").strip().lower() in ("1", "true", "yes", "on"):
+            return True
+    return False
 
 
 def data_root() -> Path:
     """Writable app data: AppData\\Jarvis when packaged, otherwise the git repo root."""
-    env_dir = (os.environ.get("ADA_DATA_DIR") or "").strip()
+    env_dir = (os.environ.get("JARVIS_DATA_DIR") or os.environ.get("ADA_DATA_DIR") or "").strip()
     if env_dir:
         p = Path(env_dir).expanduser()
         p.mkdir(parents=True, exist_ok=True)
@@ -30,12 +33,17 @@ def data_root() -> Path:
     if is_packaged():
         if sys.platform == "win32":
             appdata = os.environ.get("APPDATA") or str(Path.home() / "AppData" / "Roaming")
-            p = Path(appdata) / "Jarvis"
+            brand = Path(appdata) / "Jarvis"
+            legacy = Path(appdata) / "Ada"
         elif sys.platform == "darwin":
-            p = Path.home() / "Library" / "Application Support" / "Jarvis"
+            brand = Path.home() / "Library" / "Application Support" / "Jarvis"
+            legacy = Path.home() / "Library" / "Application Support" / "Ada"
         else:
             xdg = (os.environ.get("XDG_DATA_HOME") or "").strip()
-            p = Path(xdg) / "Jarvis" if xdg else Path.home() / ".local" / "share" / "Jarvis"
+            base = Path(xdg) if xdg else Path.home() / ".local" / "share"
+            brand = base / "Jarvis"
+            legacy = base / "Ada"
+        p = brand if brand.exists() or not legacy.exists() else legacy
         p.mkdir(parents=True, exist_ok=True)
         return p
     return Path(__file__).resolve().parent.parent
@@ -54,13 +62,14 @@ else:
 def _config_yaml_path() -> Path:
     packaged = data_root() / "jarvis-config.yaml"
     bundled = _BACKEND_ROOT / "jarvis-config.yaml"
+    legacy = _BACKEND_ROOT / "ada-config.yaml"
     if is_packaged():
         return packaged
-    return bundled
+    return bundled if bundled.exists() or not legacy.exists() else legacy
 
 
 CONFIG_YAML = _config_yaml_path()
-_LEGACY_CONFIG_YAML = _BACKEND_ROOT / "jarvis-config.yaml"
+_LEGACY_CONFIG_YAML = _BACKEND_ROOT / "ada-config.yaml"
 
 # Legacy paths at repo root (used only if no yaml)
 _LLM_PROVIDER_FILE = _REPO_ROOT / "ada-llm-provider.txt"
@@ -108,7 +117,7 @@ _DEFAULTS: dict[str, Any] = {
 }
 
 
-_LOG = logging.getLogger("ada.config")
+_LOG = logging.getLogger("jarvis.config")
 _WRITE_LOCK = threading.Lock()
 
 
@@ -224,20 +233,31 @@ def set_llm_provider(provider: str) -> None:
     _write_merged_yaml(raw)
 
 
+def _key_from_store(name: str) -> str:
+    try:
+        from auth.key_store import get_key
+
+        return get_key(name)
+    except Exception:
+        return ""
+
+
 def get_openai_api_key() -> str:
-    key = os.environ.get("OPENAI_API_KEY", "").strip().strip('"')
-    if not key:
-        raise ValueError("OPENAI_API_KEY not set. Add it in Settings or in a .env file.")
-    return key
+    key = os.environ.get("OPENAI_API_KEY", "").strip().strip('"') or _key_from_store("OPENAI_API_KEY")
+    if key:
+        os.environ["OPENAI_API_KEY"] = key
+        return key
+    raise ValueError("OPENAI_API_KEY not set. Add it in Settings or in a .env file.")
 
 
 def get_xai_api_key() -> str:
     key = (
         os.environ.get("xAI_API_KEY") or os.environ.get("XAI_API_KEY") or ""
-    ).strip().strip('"')
-    if not key:
-        raise ValueError("xAI_API_KEY not set. Add it in Settings or in a .env file.")
-    return key
+    ).strip().strip('"') or _key_from_store("XAI_API_KEY")
+    if key:
+        os.environ["XAI_API_KEY"] = key
+        return key
+    raise ValueError("xAI_API_KEY not set. Add it in Settings or in a .env file.")
 
 
 def get_llm_api_key() -> str:
@@ -424,9 +444,10 @@ def get_workspace_root() -> str:
     raw = (_merged_config().get("workspace_root") or "").strip()
     if raw:
         return raw
-    marker = data_root() / "ada-workspace-root.txt"
-    if marker.exists():
-        return marker.read_text(encoding="utf-8").strip()
+    for name in ("jarvis-workspace-root.txt", "ada-workspace-root.txt"):
+        marker = data_root() / name
+        if marker.exists():
+            return marker.read_text(encoding="utf-8").strip()
     return ""
 
 
@@ -439,7 +460,7 @@ def set_workspace_root(path: str) -> None:
             raw = yaml.safe_load(f) or {}
     raw["workspace_root"] = p or None
     _write_merged_yaml(raw)
-    marker = data_root() / "ada-workspace-root.txt"
+    marker = data_root() / "jarvis-workspace-root.txt"
     if p:
         marker.write_text(p, encoding="utf-8")
     elif marker.exists():
@@ -447,11 +468,14 @@ def set_workspace_root(path: str) -> None:
 
 
 def api_keys_status() -> dict[str, bool]:
+    openai_set = bool((os.environ.get("OPENAI_API_KEY") or "").strip() or _key_from_store("OPENAI_API_KEY"))
+    xai_set = bool(
+        (os.environ.get("xAI_API_KEY") or os.environ.get("XAI_API_KEY") or "").strip()
+        or _key_from_store("XAI_API_KEY")
+    )
     return {
-        "openai_set": bool((os.environ.get("OPENAI_API_KEY") or "").strip()),
-        "xai_set": bool(
-            (os.environ.get("xAI_API_KEY") or os.environ.get("XAI_API_KEY") or "").strip()
-        ),
+        "openai_set": openai_set,
+        "xai_set": xai_set,
     }
 
 
@@ -586,32 +610,50 @@ def write_api_keys(*, openai_key: str | None = None, xai_key: str | None = None)
                 continue
             k, _, v = line.partition("=")
             existing[k.strip()] = v.strip().strip('"').strip("'")
+    sealed_openai = openai_key
+    sealed_xai = xai_key
     if openai_key is not None:
         val = openai_key.strip()
         if "\n" in val or "\r" in val:
             raise ValueError("API key must not contain newlines")
+        existing.pop("OPENAI_API_KEY", None)
         if val:
-            existing["OPENAI_API_KEY"] = val
             os.environ["OPENAI_API_KEY"] = val
         else:
-            existing.pop("OPENAI_API_KEY", None)
             os.environ.pop("OPENAI_API_KEY", None)
     if xai_key is not None:
         val = xai_key.strip()
         if "\n" in val or "\r" in val:
             raise ValueError("API key must not contain newlines")
         existing.pop("xAI_API_KEY", None)
+        existing.pop("XAI_API_KEY", None)
         if val:
-            existing["XAI_API_KEY"] = val
             os.environ["XAI_API_KEY"] = val
             os.environ.pop("xAI_API_KEY", None)
         else:
-            existing.pop("XAI_API_KEY", None)
             os.environ.pop("XAI_API_KEY", None)
             os.environ.pop("xAI_API_KEY", None)
+    if sealed_openai is None and existing.get("OPENAI_API_KEY"):
+        sealed_openai = existing.get("OPENAI_API_KEY")
+    if sealed_xai is None and (existing.get("XAI_API_KEY") or existing.get("xAI_API_KEY")):
+        sealed_xai = existing.get("XAI_API_KEY") or existing.get("xAI_API_KEY")
+    sealed_ok = False
+    try:
+        from auth.key_store import set_keys
+
+        set_keys(openai=sealed_openai, xai=sealed_xai)
+        sealed_ok = True
+    except Exception as exc:
+        _LOG.warning("encrypted key store write failed: %s", exc)
+        if sealed_openai:
+            existing["OPENAI_API_KEY"] = sealed_openai.strip()
+        if sealed_xai:
+            existing["XAI_API_KEY"] = sealed_xai.strip()
     lines = list(comments)
     for k, v in existing.items():
         if not v:
+            continue
+        if sealed_ok and k in ("OPENAI_API_KEY", "XAI_API_KEY", "xAI_API_KEY"):
             continue
         safe = v.replace("\\", "\\\\").replace('"', '\\"')
         lines.append(f'{k}="{safe}"')

@@ -15,22 +15,25 @@ _TOKEN: Optional[str] = None
 
 
 def token_path() -> Path:
-    raw = (os.environ.get("ADA_API_TOKEN_PATH") or "").strip()
+    raw = (os.environ.get("JARVIS_API_TOKEN_PATH") or os.environ.get("ADA_API_TOKEN_PATH") or "").strip()
     if raw:
         return Path(raw).expanduser()
     try:
         from config import data_root
 
-        return data_root() / ".secrets" / "jarvis-api-token"
+        root = data_root() / ".secrets"
     except Exception:
-        return Path(__file__).resolve().parents[2] / ".secrets" / "jarvis-api-token"
+        root = Path(__file__).resolve().parents[2] / ".secrets"
+    brand = root / "jarvis-api-token"
+    legacy = root / "ada-api-token"
+    return brand if brand.exists() or not legacy.exists() else legacy
 
 
 def get_or_create_token() -> str:
     global _TOKEN
     if _TOKEN:
         return _TOKEN
-    env = (os.environ.get("ADA_API_TOKEN") or "").strip()
+    env = (os.environ.get("JARVIS_API_TOKEN") or os.environ.get("ADA_API_TOKEN") or "").strip()
     if env:
         _TOKEN = env
         return _TOKEN
@@ -66,7 +69,13 @@ def verify_token(provided: Optional[str]) -> bool:
 
 
 def token_from_headers(headers) -> Optional[str]:
-    raw = (headers.get("x-jarvis-token") or headers.get("X-Jarvis-Token") or "").strip()
+    raw = (
+        headers.get("x-jarvis-token")
+        or headers.get("X-Jarvis-Token")
+        or headers.get("x-ada-token")
+        or headers.get("X-Ada-Token")
+        or ""
+    ).strip()
     if raw:
         return raw
     auth = (headers.get("authorization") or headers.get("Authorization") or "").strip()

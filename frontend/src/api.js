@@ -8,12 +8,18 @@ let _apiToken = ''
 export async function initApiAuth() {
   if (typeof window === 'undefined' || _apiToken) return
   if (!detectDesktopShell()) return
-  try {
-    const { invoke } = await import('@tauri-apps/api/core')
-    const t = await invoke('api_token')
-    if (typeof t === 'string' && t.trim()) _apiToken = t.trim()
-  } catch {
-    /* browser / missing command */
+  for (let i = 0; i < 20; i += 1) {
+    try {
+      const { invoke } = await import('@tauri-apps/api/core')
+      const t = await invoke('api_token')
+      if (typeof t === 'string' && t.trim()) {
+        _apiToken = t.trim()
+        return
+      }
+    } catch {
+      /* browser / missing command */
+    }
+    await new Promise((r) => setTimeout(r, 200))
   }
 }
 
@@ -57,16 +63,17 @@ async function request(path, options = {}) {
   return res.json();
 }
 
-export async function chatbotResponse(message, attachmentPaths = null, webSearchQuery = null) {
-  const { reply } = await request('/chat/response', {
+export async function chatbotResponse(message, attachmentPaths = null, webSearchQuery = null, signal = null) {
+  const data = await request('/chat/response', {
     method: 'POST',
     body: JSON.stringify({
       message: message || '',
       attachment_paths: attachmentPaths,
       web_search_query: webSearchQuery || null,
     }),
+    signal,
   });
-  return reply;
+  return data;
 }
 
 export async function sendMessage(
@@ -226,6 +233,7 @@ export async function sendMessageWithFiles(
   codingProjectSnapshot = null,
   customAgentId = null,
   signal = null,
+  resumeTaskId = null,
 ) {
   const form = new FormData();
   form.append('message', message || '');
@@ -234,6 +242,7 @@ export async function sendMessageWithFiles(
   if (codingMode) form.append('coding_mode', 'true');
   if (codingProjectSnapshot) form.append('coding_project_snapshot', codingProjectSnapshot);
   if (customAgentId) form.append('custom_agent_id', customAgentId);
+  if (resumeTaskId) form.append('resume_task_id', resumeTaskId);
   for (const f of files) {
     form.append('files', f);
   }
@@ -247,8 +256,7 @@ export async function sendMessageWithFiles(
     headers: { ...authHeaders() },
   });
   if (!res.ok) throw new Error(await res.text() || `HTTP ${res.status}`);
-  const data = await res.json();
-  return data.reply;
+  return res.json();
 }
 
 export async function appendChatLog(role, content, chatId = null) {
@@ -497,10 +505,14 @@ export async function listPendingApprovals(chatId = null) {
   return request(`/agent/pending${q}`)
 }
 
-export async function resolveAgentApproval(approvalId, approve) {
+export async function resolveAgentApproval(approvalId, approve, chatId = null) {
   return request('/agent/approve', {
     method: 'POST',
-    body: JSON.stringify({ approval_id: approvalId, approve: !!approve }),
+    body: JSON.stringify({
+      approval_id: approvalId,
+      approve: !!approve,
+      chat_id: chatId || undefined,
+    }),
   })
 }
 

@@ -569,7 +569,7 @@ def compute_supervisor_decision(
         next_s = (
             "1. Use the project snapshot (open folder) for paths and file bodies. "
             "2. Run Python in the sandbox when analysis, plots, or computation are needed; otherwise propose file updates directly. "
-            "3. Emit full files as ada-file fences so the UI can diff and the user can apply changes locally."
+            "3. Emit full files as jarvis-file fences so the UI can diff and the user can apply changes locally."
         )
         if ctx:
             reasoning += " Project folder snapshot is attached for this turn."

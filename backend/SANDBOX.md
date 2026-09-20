@@ -14,7 +14,7 @@ The coding agent runs model-generated Python in a **child process** with a **tim
 Print **one line per figure** (no line breaks inside the base64):
 
 ```text
-ADA_IMAGE_PNG:<base64>
+JARVIS_IMAGE_PNG:<base64>
 ```
 
 Example:
@@ -27,7 +27,7 @@ import matplotlib.pyplot as plt
 buf = io.BytesIO()
 plt.plot([1, 2, 3])
 plt.savefig(buf, format="png")
-print("ADA_IMAGE_PNG:" + base64.b64encode(buf.getvalue()).decode())
+print("JARVIS_IMAGE_PNG:" + base64.b64encode(buf.getvalue()).decode())
 ```
 
 The coding agent turns that into a Markdown image so the frontend renders it. A **single stdout line** that is raw PNG base64 (`iVBOR…`) is also detected.
@@ -37,9 +37,9 @@ The coding agent turns that into a Markdown image so the frontend renders it. A 
 Print one line (raw markup, or base64 of the markup):
 
 ```text
-ADA_PREVIEW_HTML:<div>hello</div>
-ADA_PREVIEW_SVG:<svg xmlns="http://www.w3.org/2000/svg" width="80" height="40"><rect width="80" height="40" fill="teal"/></svg>
-ADA_PREVIEW_MERMAID:graph TD; A[Start] --> B[Done]
+JARVIS_PREVIEW_HTML:<div>hello</div>
+JARVIS_PREVIEW_SVG:<svg xmlns="http://www.w3.org/2000/svg" width="80" height="40"><rect width="80" height="40" fill="teal"/></svg>
+JARVIS_PREVIEW_MERMAID:graph TD; A[Start] --> B[Done]
 ```
 
 The chat UI renders those fences in a sandboxed iframe (no scripts). You can also put ` ```html ` / ` ```svg ` / ` ```mermaid ` fences in a normal reply.

@@ -9,6 +9,7 @@ from config import get_workspace_root
 
 SKILL_DIRS = (
     ".agents/skills",
+    ".jarvis/skills",
     ".ada/skills",
     ".cursor/skills",
     ".claude/skills",
