@@ -130,6 +130,7 @@ import {
 import {
   pushWorkspaceEdit,
   workspaceUndoStatus,
+  peekWorkspaceUndo,
   finalizeWorkspaceUndoPop,
   peekWorkspaceRedo,
   finalizeWorkspaceRedoPop,
@@ -2043,6 +2044,34 @@ function App() {
       checkpoints.find((c) => c?.kind === 'workspace_write' || c?.kind === 'overlay_turn') || null,
     [checkpoints],
   )
+
+  const applyWorkspaceUndo = useCallback(async () => {
+    const label = workspaceLocalLabel.trim()
+    if (!label) return
+    const peek = await peekWorkspaceUndo(label)
+    // #region agent log
+    fetch('http://127.0.0.1:7379/ingest/d4a6c664-f167-437c-bb75-f8687c530271',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'ff2cb7'},body:JSON.stringify({sessionId:'ff2cb7',location:'App.jsx:applyWorkspaceUndo',message:'undo peek',data:{label,deltaCount:peek?.deltas?.length||0,canUndo:workspaceUndoUi.canUndo},timestamp:Date.now(),hypothesisId:'B'})}).catch(()=>{})
+    // #endregion
+    if (!peek?.deltas?.length) return
+    const results = new Map()
+    for (const d of peek.deltas) {
+      const r = await saveProjectFile(d.relPath, d.content, { skipUndoRecord: true })
+      if (!r?.ok) {
+        window.alert(r?.error || 'Could not undo one or more files.')
+        return
+      }
+      results.set(d.relPath, r)
+    }
+    await finalizeWorkspaceUndoPop(label)
+    setFilePreview((p) => {
+      if (!p) return p
+      const d = peek.deltas.find((x) => x.relPath === p.relPath)
+      if (!d) return p
+      const r = results.get(d.relPath)
+      return { ...p, body: d.content, source: r?.cacheOnly ? 'cache' : 'handle' }
+    })
+    setWorkspaceUndoTick((t) => t + 1)
+  }, [workspaceLocalLabel, saveProjectFile, workspaceUndoUi.canUndo])
 
   const applyWorkspaceRedo = useCallback(async () => {
     const label = workspaceLocalLabel.trim()
@@ -4275,6 +4304,16 @@ function App() {
                           onClick={() => latestRestorableCheckpoint && restoreCheckpointById(latestRestorableCheckpoint.id)}
                         >
                           Restore checkpoint
+                        </button>
+                        <button
+                          type="button"
+                          className="repo-context-icon-btn"
+                          title="Undo the last project file edit"
+                          aria-label="Undo project file edit"
+                          disabled={!workspaceUndoUi.canUndo}
+                          onClick={() => applyWorkspaceUndo()}
+                        >
+                          Undo
                         </button>
                         <button
                           type="button"

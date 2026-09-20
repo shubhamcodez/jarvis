@@ -232,6 +232,39 @@ class WorkspaceTreeListTests(unittest.TestCase):
                 self.assertNotEqual(first, second)
 
 
+class BrandEnvAliasTests(unittest.TestCase):
+    def test_oauth_packaged_reads_jarvis(self):
+        with patch.dict("os.environ", {"JARVIS_PACKAGED": "1", "ADA_PACKAGED": ""}, clear=False):
+            import importlib
+
+            import auth.google_oauth as go
+
+            importlib.reload(go)
+            self.assertTrue(go._is_packaged())
+
+    def test_desktop_armed_reads_jarvis(self):
+        with patch.dict("os.environ", {"JARVIS_DESKTOP_ARMED": "1", "ADA_DESKTOP_ARMED": ""}, clear=False):
+            with patch("config._merged_config", return_value={"desktop_armed": False}):
+                from config import is_desktop_armed
+
+                self.assertTrue(is_desktop_armed())
+
+    def test_shell_fallback_reads_jarvis_packaged(self):
+        env = {
+            "JARVIS_PACKAGED": "1",
+            "ADA_PACKAGED": "",
+            "ADA_ENABLE_SHELL": "",
+            "JARVIS_ENABLE_SHELL": "",
+            "ADA_DISABLE_SHELL": "",
+            "JARVIS_DISABLE_SHELL": "",
+        }
+        with patch.dict("os.environ", env, clear=False):
+            with patch("config.is_packaged", side_effect=RuntimeError("no config")):
+                from tools.shell_runner import is_shell_enabled
+
+                self.assertFalse(is_shell_enabled())
+
+
 class WorkspaceRunTests(unittest.TestCase):
     def test_command_for_python(self):
         from tools.workspace_run import command_for_path

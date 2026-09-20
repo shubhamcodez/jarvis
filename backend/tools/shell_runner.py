@@ -43,8 +43,9 @@ def is_shell_enabled() -> bool:
         if is_packaged():
             return False
     except Exception:
-        if os.environ.get("ADA_PACKAGED", "").strip().lower() in ("1", "true", "yes", "on"):
-            return False
+        for key in ("JARVIS_PACKAGED", "ADA_PACKAGED"):
+            if os.environ.get(key, "").strip().lower() in ("1", "true", "yes", "on"):
+                return False
     return True
 
 

@@ -421,7 +421,11 @@ def set_autonomy_level(level: str) -> None:
 
 
 def is_desktop_armed() -> bool:
-    env = os.environ.get("ADA_DESKTOP_ARMED", "").strip().lower()
+    env = (
+        os.environ.get("JARVIS_DESKTOP_ARMED")
+        or os.environ.get("ADA_DESKTOP_ARMED")
+        or ""
+    ).strip().lower()
     if env in ("0", "false", "no", "off"):
         return False
     if env in ("1", "true", "yes", "on"):
@@ -437,7 +441,9 @@ def set_desktop_armed(armed: bool) -> None:
             raw = yaml.safe_load(f) or {}
     raw["desktop_armed"] = bool(armed)
     _write_merged_yaml(raw)
-    os.environ["ADA_DESKTOP_ARMED"] = "1" if armed else "0"
+    flag = "1" if armed else "0"
+    os.environ["ADA_DESKTOP_ARMED"] = flag
+    os.environ["JARVIS_DESKTOP_ARMED"] = flag
 
 
 def get_workspace_root() -> str:

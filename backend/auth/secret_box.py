@@ -38,7 +38,9 @@ def _software_key() -> bytes:
 
         material = get_or_create_token().encode("utf-8")
     except Exception:
-        material = (os.environ.get("ADA_API_TOKEN") or "jarvis-local").encode("utf-8")
+        material = (
+            os.environ.get("JARVIS_API_TOKEN") or os.environ.get("ADA_API_TOKEN") or "jarvis-local"
+        ).encode("utf-8")
     return hashlib.pbkdf2_hmac("sha256", material, b"jarvis-oauth-v1", 120_000, dklen=32)
 
 

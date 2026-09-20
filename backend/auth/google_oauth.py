@@ -49,7 +49,10 @@ def _now() -> int:
 def _is_packaged() -> bool:
     if getattr(__import__("sys"), "frozen", False):
         return True
-    return os.environ.get("ADA_PACKAGED", "").strip().lower() in ("1", "true", "yes", "on")
+    for key in ("JARVIS_PACKAGED", "ADA_PACKAGED"):
+        if os.environ.get(key, "").strip().lower() in ("1", "true", "yes", "on"):
+            return True
+    return False
 
 
 def _store_path() -> Path:
@@ -62,7 +65,11 @@ def _store_path() -> Path:
 
             return data_root() / ".secrets" / "google-oauth-store.json"
         except Exception:
-            appdata = os.environ.get("ADA_DATA_DIR") or os.environ.get("APPDATA")
+            appdata = (
+                os.environ.get("JARVIS_DATA_DIR")
+                or os.environ.get("ADA_DATA_DIR")
+                or os.environ.get("APPDATA")
+            )
             if appdata:
                 return Path(appdata) / ".secrets" / "google-oauth-store.json"
     return _DEFAULT_STORE_PATH
