@@ -38,7 +38,9 @@ turn
 
 ## Structured logs + metrics
 
-- JSON logs on the `ada.*` loggers (stderr + rotating `jarvis-observability/logs/app.jsonl`).
+- JSON logs on the `jarvis.*` loggers (legacy `ada.*` still attached; stderr + rotating `jarvis-observability/logs/app.jsonl`).
+- Specialist steps (desktop clicks, coding, shell) append to `jarvis-observability/traces/actions.jsonl` and as span events. `GET /observability/actions`.
+- Leftover `ada-observability/` is read as a fallback and copied once if Jarvis has no files yet. New writes always go to `jarvis-observability/`.
 - Correlated with `trace_id` when a span is open.
 - `GET /observability/logs?limit=200`
 - In-process counters/histograms (Prometheus-shaped keys) flush to
@@ -52,7 +54,7 @@ turn
 
 ## Trace logging (automatic)
 
-- Every chat/agent run is logged to `jarvis-observability/traces/trace.jsonl` (or `jarvis-observability` if that folder exists and `jarvis-observability` does not).
+- Every chat/agent run is logged to `jarvis-observability/traces/trace.jsonl`.
 - Fields: `provider`, `route` (chat | run_desktop | run_coding | run_shell | run_finance), `message`, `reply`, `success`, `error`, `duration_sec`, `token_input`, `token_output`.
 - **Streaming chat** (`/chat/send-message/stream` on the chat path) now also writes a trace row when the stream completes.
 - **Success rates, tokens, errors** can be aggregated per model via `GET /observability/traces` or `observability.optimize.aggregate_trace_stats()`.

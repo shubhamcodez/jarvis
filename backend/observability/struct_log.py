@@ -76,10 +76,10 @@ def configure_struct_logging() -> None:
     stream.setFormatter(formatter)
     file_handler = None
     try:
-        from .config import OBS_DIR, ensure_dirs
+        from .config import ensure_dirs, obs_dir
 
         ensure_dirs()
-        log_dir = OBS_DIR / "logs"
+        log_dir = obs_dir() / "logs"
         log_dir.mkdir(parents=True, exist_ok=True)
         from logging.handlers import RotatingFileHandler
 

@@ -6,7 +6,7 @@ from __future__ import annotations
 import json
 from typing import Any, Optional
 
-from .config import OPT_DIR, ensure_dirs
+from .config import ensure_dirs, obs_dir
 
 
 def run_human_eval_benchmark(
@@ -59,7 +59,7 @@ def run_human_eval_benchmark(
             "note": "pass@1 is not computed in-process; model output is never executed.",
         }
     ensure_dirs()
-    out_path = OPT_DIR / "human_eval_results.json"
+    out_path = obs_dir() / "optimization" / "human_eval_results.json"
     try:
         out_path.write_text(json.dumps({"results": results}, indent=2), encoding="utf-8")
     except Exception:
