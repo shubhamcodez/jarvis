@@ -443,6 +443,34 @@ class TestChatPlan(unittest.TestCase):
             shutil.rmtree(dest, ignore_errors=True)
 
 
+class TestWorkspaceFileEdits(unittest.TestCase):
+    def test_same_line_closer_is_extracted(self):
+        from tools.workspace_file_edits import extract_workspace_file_edits
+
+        text = "```jarvis-file:pkg/hello.py\nprint('hi')```\n"
+        clean, edits = extract_workspace_file_edits(text)
+        self.assertEqual(len(edits), 1, f"expected one edit, got {edits!r} clean={clean!r}")
+        self.assertEqual(edits[0]["path"], "pkg/hello.py")
+        self.assertIn("print('hi')", edits[0]["content"])
+
+    def test_empty_file_fence_is_extracted(self):
+        from tools.workspace_file_edits import extract_workspace_file_edits
+
+        text = "```jarvis-file:empty.txt\n```\n"
+        clean, edits = extract_workspace_file_edits(text)
+        self.assertEqual(len(edits), 1, f"expected empty-file edit, got {edits!r} clean={clean!r}")
+        self.assertEqual(edits[0]["path"], "empty.txt")
+
+    def test_standard_fence_still_works(self):
+        from tools.workspace_file_edits import extract_workspace_file_edits
+
+        text = "```jarvis-file:a.py\nx = 1\n```\n"
+        clean, edits = extract_workspace_file_edits(text)
+        self.assertEqual(len(edits), 1)
+        self.assertEqual(edits[0]["path"], "a.py")
+        self.assertIn("x = 1", edits[0]["content"])
+
+
 class TestSlashCatalog(unittest.TestCase):
     def test_builtins_include_goal(self):
         from tools.slash_commands import catalog
