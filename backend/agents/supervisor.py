@@ -456,7 +456,37 @@ def _last_desktop_goal(recent_turns: Optional[list]) -> Optional[str]:
     return None
 
 
-def _heuristic_desktop_task(message: str, recent_turns: Optional[list] = None) -> Optional[dict]:
+_NOT_CONTINUE = (
+    "thanks",
+    "thank you",
+    "thx",
+    "never mind",
+    "nvm",
+    "stop",
+    "cancel",
+    "what model",
+    "who are you",
+)
+
+
+def looks_like_task_continuation(message: str) -> bool:
+    low = (message or "").strip().lower()
+    if not low or len(low) > 180:
+        return False
+    if any(p in low for p in _NOT_CONTINUE):
+        return False
+    if any(p in low for p in _CONTINUE_DESKTOP):
+        return True
+    if low in {"ok", "yes", "go", "again", "more", "continue", "resume", "please"}:
+        return True
+    return "again" in low or "keep" in low or "that" in low
+
+
+def _heuristic_desktop_task(
+    message: str,
+    recent_turns: Optional[list] = None,
+    thread: Optional[dict] = None,
+) -> Optional[dict]:
     m = (message or "").strip()
     if not m:
         return None
@@ -467,20 +497,31 @@ def _heuristic_desktop_task(message: str, recent_turns: Optional[list] = None) -
             "Heuristic: on-screen click / live game — desktop GUI, not chat.",
             "1. Look at the screen 2. Click the live UI 3. Continue until the goal is done",
         )
-    if any(h in low for h in _CONTINUE_DESKTOP):
-        prior = _last_desktop_goal(recent_turns)
+    prior = (thread or {}).get("last_goal") or _last_desktop_goal(recent_turns)
+    unfinished_desktop = (thread or {}).get("last_route") == "desktop" and (thread or {}).get(
+        "last_status"
+    ) == "unfinished"
+    if looks_like_task_continuation(m) or any(h in low for h in _CONTINUE_DESKTOP):
         if prior:
             return _decision_with_agents(
                 [{"agent": "desktop", "goal": prior}],
-                "Heuristic: continue the previous desktop task.",
+                "Heuristic: continue the open desktop goal from thread context.",
                 "1. Resume GUI control 2. Finish the same goal",
             )
-        if "desktop" in " ".join(str((t or {}).get("content") or "") for t in (recent_turns or [])).lower():
+        if unfinished_desktop or "desktop" in " ".join(
+            str((t or {}).get("content") or "") for t in (recent_turns or [])
+        ).lower():
             return _decision_with_agents(
                 [{"agent": "desktop", "goal": m}],
                 "Heuristic: user asked to continue desktop work.",
                 "1. Resume GUI control 2. Finish the goal",
             )
+    if unfinished_desktop and prior and looks_like_task_continuation(m):
+        return _decision_with_agents(
+            [{"agent": "desktop", "goal": prior}],
+            "Heuristic: unfinished desktop goal + short follow-up.",
+            "1. Resume GUI control 2. Finish the same goal",
+        )
     return None
 
 
@@ -551,6 +592,7 @@ def supervisor_decision(
     *,
     llm_user_content: Optional[str] = None,
     recent_turns: Optional[list] = None,
+    thread: Optional[dict] = None,
 ) -> dict:
     """
     Returns dict with:
@@ -564,7 +606,18 @@ def supervisor_decision(
     if not user_message:
         return _decision_with_agents([], "", "")
 
+    if thread is None:
+        from memory.thread_context import infer_thread_from_turns
+
+        thread = infer_thread_from_turns(recent_turns)
+
     llm_body = (llm_user_content or user_message).strip()
+    if thread:
+        from memory.thread_context import format_thread_context
+
+        pinned = format_thread_context(thread)
+        if pinned:
+            llm_body = pinned + "\n\nCurrent user message:\n" + llm_body
     if recent_turns:
         bits = []
         for t in recent_turns[-6:]:
@@ -577,7 +630,7 @@ def supervisor_decision(
         if bits:
             llm_body = "Recent turns:\n" + "\n".join(bits) + "\n\nCurrent user message:\n" + llm_body
 
-    hinted_desk = _heuristic_desktop_task(user_message, recent_turns)
+    hinted_desk = _heuristic_desktop_task(user_message, recent_turns, thread)
     if hinted_desk:
         return hinted_desk
 
@@ -655,6 +708,7 @@ def compute_supervisor_decision(
     coding_mode: bool = False,
     coding_project_context: str = "",
     recent_turns: Optional[list] = None,
+    thread: Optional[dict] = None,
 ) -> dict:
     """
     Entry point for the router: optionally forces the coding agent (UI coding mode),
@@ -663,7 +717,11 @@ def compute_supervisor_decision(
     """
     um = (user_message or "").strip()
     ctx = (coding_project_context or "").strip()
-    desk = _heuristic_desktop_task(um, recent_turns)
+    if thread is None:
+        from memory.thread_context import infer_thread_from_turns
+
+        thread = infer_thread_from_turns(recent_turns)
+    desk = _heuristic_desktop_task(um, recent_turns, thread)
     if desk:
         return desk
     if coding_mode and um:
@@ -680,4 +738,4 @@ def compute_supervisor_decision(
             reasoning,
             next_s,
         )
-    return supervisor_decision(api_key, provider, um, recent_turns=recent_turns)
+    return supervisor_decision(api_key, provider, um, recent_turns=recent_turns, thread=thread)

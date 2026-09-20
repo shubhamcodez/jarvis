@@ -235,12 +235,43 @@ def append_hitl(state: dict[str, Any], item: dict[str, Any]) -> dict[str, Any]:
     return state
 
 
+def record_thread_turn(
+    state: dict[str, Any],
+    *,
+    route: str,
+    goal: str,
+    reply: str,
+    unfinished: bool,
+) -> dict[str, Any]:
+    """Pin last specialist + goal so the next chat turn still knows what was open."""
+    from memory.thread_context import summarize_agent_trace
+
+    state["last_route"] = (route or "").strip()
+    state["last_goal"] = (goal or state.get("goal") or "")[:800]
+    state["last_status"] = "unfinished" if unfinished else "complete"
+    state["last_summary"] = summarize_agent_trace(reply or "")[:1500]
+    if unfinished and state["last_goal"]:
+        note = f"{state['last_route'] or 'agent'} goal still open: {state['last_goal'][:200]}"
+        unresolved = [u for u in (state.get("unresolved") or []) if u != note]
+        unresolved.append(note)
+        state["unresolved"] = unresolved[-8:]
+    save_state(state)
+    return state
+
+
 def structured_view(state: dict[str, Any]) -> str:
     """Compact structured state for the context builder (not raw traces)."""
     if not state:
         return ""
     lines = []
-    if state.get("goal"):
+    if state.get("last_route") or state.get("last_goal"):
+        lines.append(
+            f"Last specialist: {state.get('last_route') or '?'} "
+            f"({state.get('last_status') or state.get('status') or 'unknown'})"
+        )
+        if state.get("last_goal"):
+            lines.append(f"Open goal: {state['last_goal']}")
+    if state.get("goal") and state.get("goal") != state.get("last_goal"):
         lines.append(f"Goal: {state['goal']}")
     plan = state.get("plan") or []
     if plan:

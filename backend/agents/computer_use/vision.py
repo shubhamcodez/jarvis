@@ -135,3 +135,69 @@ def ask_desktop_action(
         else:
             out[key] = max(0, min(image_height - 1, v))
     return out
+
+
+_CHESS_SCENE_SYSTEM = """You are looking at a screenshot that may show chess.com or lichess.
+
+Reply with ONLY JSON:
+{"phase":"lobby"|"ingame"|"over"|"other","board":{"x":int,"y":int,"w":int,"h":int}|null,"white_at_bottom":true,"our_side":"w"|"b"|null,"our_turn":true|false|null,"result":"1-0"|"0-1"|"1/2-1/2"|null,"click":{"x":int,"y":int,"description":str}|null}
+
+Rules:
+- phase lobby: home / play menu / seek / time-control. Set click to Play Online, New Game, Play, or the confirm button that starts a game — NOT ads or login.
+- phase ingame: a live board is visible. board is the 8x8 board box in this image (pixels). white_at_bottom is true if White's pieces (or our light pieces) sit on the bottom rank. our_side is the color at the bottom. our_turn is true if it is that side to move.
+- phase over: result banner / Game Over / Checkmate / Draw.
+- click is only for lobby (or to dismiss a blocking dialog). Coordinates are in this image.
+"""
+
+
+_BOARD_FEN_SYSTEM = """The image is a chessboard with rank/file labels overlaid.
+Read every square. Reply with ONLY JSON:
+{"ranks":["........","........","........","........","........","........","........","........"],"side_to_move":"w"|"b"}
+
+ranks has 8 strings, rank 8 first through rank 1, 8 characters each.
+Use KQRBNP for white, kqrbnp for black, . for empty.
+"""
+
+
+def ask_chess_scene(
+    api_key: str,
+    provider: str,
+    image_b64: str,
+    image_width: int,
+    image_height: int,
+    goal: str,
+) -> dict[str, Any]:
+    user = (
+        f"Image is {image_width}×{image_height}. Goal: {goal}\n"
+        "Locate the chess UI and return the JSON object."
+    )
+    out = ask_vision_json(api_key, provider, image_b64, _CHESS_SCENE_SYSTEM, user, max_tokens=500)
+    board = out.get("board")
+    if isinstance(board, dict):
+        for k in ("x", "y", "w", "h"):
+            try:
+                board[k] = int(float(board[k]))
+            except (TypeError, ValueError, KeyError):
+                board = None
+                break
+        out["board"] = board
+    click = out.get("click")
+    if isinstance(click, dict) and click.get("x") is not None and click.get("y") is not None:
+        try:
+            click["x"] = max(0, min(image_width - 1, float(click["x"])))
+            click["y"] = max(0, min(image_height - 1, float(click["y"])))
+        except (TypeError, ValueError):
+            out["click"] = None
+    else:
+        out["click"] = None
+    return out
+
+
+def ask_board_placement(
+    api_key: str,
+    provider: str,
+    image_b64: str,
+    side_hint: str = "w",
+) -> dict[str, Any]:
+    user = f"side_to_move hint: {side_hint}. Reply with ONLY the JSON object."
+    return ask_vision_json(api_key, provider, image_b64, _BOARD_FEN_SYSTEM, user, max_tokens=600)

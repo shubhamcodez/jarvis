@@ -5,7 +5,8 @@ the recent tail stays verbatim and is itself trimmed if it exceeds the budget.
 """
 from __future__ import annotations
 
-from .tokens import clip_tail_to_tokens, estimate_tokens
+from .thread_context import is_agent_trace, summarize_agent_trace
+from .tokens import clip_tail_to_tokens, estimate_tokens, clip_to_tokens
 
 _SUMMARY_PREFIX = "Earlier conversation ("
 
@@ -28,11 +29,14 @@ def compact_history(
     If the recent tail alone exceeds the budget, oldest recent turns are dropped
     and remaining contents are tail-clipped.
     """
-    rows = [
-        m
-        for m in (messages or [])
-        if (m.get("role") or "") in ("user", "assistant") and not _is_prior_summary(m)
-    ]
+    rows = []
+    for m in messages or []:
+        if (m.get("role") or "") not in ("user", "assistant") or _is_prior_summary(m):
+            continue
+        body = str(m.get("content") or "")
+        if (m.get("role") or "") == "assistant" and is_agent_trace(body):
+            body = summarize_agent_trace(body)
+        rows.append({**m, "content": body})
     stats = {
         "original_messages": len(rows),
         "original_tokens": sum(estimate_tokens(str(m.get("content") or "")) for m in rows),
@@ -56,7 +60,13 @@ def compact_history(
         body = str(m.get("content") or "")
         cost = estimate_tokens(body)
         if cost > remain:
-            body = clip_tail_to_tokens(body, max(40, remain))
+            budget = max(40, remain)
+            if is_agent_trace(body) or body.startswith("Desktop task"):
+                head = clip_to_tokens(body, max(40, budget // 3))
+                tail = clip_tail_to_tokens(body, max(40, budget - estimate_tokens(head)))
+                body = head if not tail or tail in head else f"{head}\n{tail}"
+            else:
+                body = clip_tail_to_tokens(body, budget)
             cost = estimate_tokens(body)
         if remain <= 0:
             break

@@ -2,7 +2,7 @@
 from typing import Optional
 
 from agents.computer_use.actions import execute_action as _execute
-from agents.computer_use.budget import parse_duration, steps_for_budget
+from agents.computer_use.budget import implied_duration, parse_duration, steps_for_budget
 from agents.computer_use.loop import run_computer_use_loop
 from agents.computer_use.perception import capture_screen
 
@@ -43,7 +43,7 @@ def run_desktop_agent(
         return armed_err
 
     if duration_sec is None:
-        duration_sec = parse_duration(goal)
+        duration_sec = parse_duration(goal) or implied_duration(goal)
     if duration_sec:
         max_steps = max(max_steps, steps_for_budget(duration_sec, max_steps))
 

@@ -1183,6 +1183,12 @@ async def send_message_stream(body: SendMessageRequest, request: Request):
             return
 
         yield _sse_data({"type": "status", "phase": "supervisor", "message": "Running supervisor…"})
+        recent_turns = []
+        if chat_id:
+            try:
+                recent_turns = read_chat_log(chat_id)[-8:]
+            except Exception:
+                recent_turns = []
         decision = await asyncio.to_thread(
             compute_supervisor_decision,
             api_key,
@@ -1190,6 +1196,7 @@ async def send_message_stream(body: SendMessageRequest, request: Request):
             message,
             coding_mode=bool(body.coding_mode),
             coding_project_context=coding_ctx,
+            recent_turns=recent_turns,
         )
         agents_plan = decision.get("agents") or []
         if get_run_mode() == "plan":

@@ -81,6 +81,7 @@ def assemble_turn_context(
     custom_agent_system: str = "",
     project_rules: str = "",
     untrusted_tools: bool = False,
+    thread_context_text: str = "",
 ) -> ContextPack:
     """
     Production context pack:
@@ -153,6 +154,10 @@ def assemble_turn_context(
             stable.append(clip_to_tokens(rated, 220))
     except Exception:
         pass
+
+    thread = (thread_context_text or "").strip()
+    if thread:
+        dynamic.append(clip_to_tokens(thread, 700))
 
     if task_spec_text and task_spec_text.strip():
         dynamic.append("TASK SPECIFICATION (authoritative):\n" + clip_to_tokens(task_spec_text.strip(), 400))

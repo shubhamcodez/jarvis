@@ -6,9 +6,10 @@ import sys
 import time
 from typing import Callable, Optional
 
-from observability.guards import should_stop_streak
+from observability.guards import action_fingerprint, should_stop_streak
 
 from .actions import execute_action
+from .chess_play import looks_like_live_game, maybe_live_game_action
 from .memory import WorkingMemory
 from .perception import capture_screen, pixel_hash, resize_for_vision
 from .verify import after_action_hash, expects_visual_change
@@ -87,17 +88,32 @@ def run_computer_use_loop(
             f"Current plan step ({plan_index + 1}/{len(plan)}): {current}\n"
             f'"done" only if the OVERALL goal is complete.{time_note}'
         )
-        action = ask_desktop_action(
-            api_key,
-            provider,
-            vis_b64,
-            goal_block,
-            step,
-            last_result,
-            vw,
-            vh,
-            memory_text=mem.prompt_block(),
-        )
+        action = None
+        if looks_like_live_game(goal):
+            action = maybe_live_game_action(
+                api_key=api_key,
+                provider=provider,
+                vis_b64=vis_b64,
+                vw=vw,
+                vh=vh,
+                shot=shot,
+                sx=sx,
+                sy=sy,
+                goal=goal,
+                mem=mem,
+            )
+        if not action:
+            action = ask_desktop_action(
+                api_key,
+                provider,
+                vis_b64,
+                goal_block,
+                step,
+                last_result,
+                vw,
+                vh,
+                memory_text=mem.prompt_block(),
+            )
         if run_id:
             try:
                 from agents.run_control import add_tokens
@@ -109,14 +125,19 @@ def run_computer_use_loop(
         desc = action.get("description") or action.get("action")
         act = (action.get("action") or "").lower()
 
+        screen_space = str(action.get("coord_space") or "") == "screen"
         if act in ("click", "double_click", "right_click", "move") and action.get("x") is not None:
-            mx = float(action["x"]) * sx
-            my = float(action["y"]) * sy
+            mx = float(action["x"]) if screen_space else float(action["x"]) * sx
+            my = float(action["y"]) if screen_space else float(action["y"]) * sy
             gx, gy = shot.to_mouse(mx, my)
             action["x"], action["y"] = gx, gy
         if act == "drag" and action.get("x") is not None and action.get("x2") is not None:
-            a = shot.to_mouse(float(action["x"]) * sx, float(action["y"]) * sy)
-            b = shot.to_mouse(float(action["x2"]) * sx, float(action["y2"]) * sy)
+            if screen_space:
+                a = shot.to_mouse(float(action["x"]), float(action["y"]))
+                b = shot.to_mouse(float(action["x2"]), float(action["y2"]))
+            else:
+                a = shot.to_mouse(float(action["x"]) * sx, float(action["y"]) * sy)
+                b = shot.to_mouse(float(action["x2"]) * sx, float(action["y2"]) * sy)
             action["x"], action["y"] = a
             action["x2"], action["y2"] = b
 
@@ -136,8 +157,10 @@ def run_computer_use_loop(
             break
 
         if act != "wait":
-            action_history.append({"action": act, "thought": thought})
-            if should_stop_streak(act, thought, action_history, streak_limit=4):
+            action_history.append(
+                {"action": act, "thought": thought, "fingerprint": action_fingerprint(action)}
+            )
+            if should_stop_streak(act, thought, action_history, streak_limit=5):
                 if remaining is not None and remaining > 20:
                     last_result = "Repeated action; try a different approach."
                     action_history.clear()
@@ -163,7 +186,11 @@ def run_computer_use_loop(
             last_result = (result or "") + " (no visible change)"
         else:
             mem.stuck = 0
-            if act not in ("wait", "note", "analyze_chess") and plan_index < len(plan) - 1:
+            if (
+                act not in ("wait", "note", "analyze_chess")
+                and plan_index < len(plan) - 1
+                and not looks_like_live_game(goal)
+            ):
                 plan_index = min(plan_index + 1, len(plan) - 1)
                 mem.phase = f"plan {plan_index + 1}/{len(plan)}"
 

@@ -20,6 +20,23 @@ async def _supervisor_node(state: RouterState) -> RouterState:
     api_key = state["api_key"]
     provider = state.get("provider") or "openai"
     existing = state.get("supervisor_decision")
+    recent_turns = []
+    chat_id = state.get("chat_id") or ""
+    if chat_id:
+        try:
+            from memory.chat_log import read_chat_log
+
+            recent_turns = read_chat_log(chat_id)[-8:]
+        except Exception:
+            recent_turns = []
+    thread = {}
+    try:
+        from agents.agent_state import load_state
+        from memory.thread_context import infer_thread_from_turns, merge_thread, thread_from_state
+
+        thread = merge_thread(thread_from_state(load_state(chat_id)), infer_thread_from_turns(recent_turns))
+    except Exception:
+        thread = {}
     from observability.spans import span
 
     with span("supervisor", provider=provider):
@@ -33,6 +50,7 @@ async def _supervisor_node(state: RouterState) -> RouterState:
                 message,
                 coding_mode=bool(state.get("coding_mode")),
                 coding_project_context=(state.get("coding_project_context") or ""),
+                recent_turns=recent_turns,
             )
     agents = decision.get("agents") or []
     tools = state.get("custom_agent_tools")
