@@ -10,6 +10,8 @@ from typing import Any
 from config import data_root
 
 _LOCK = threading.Lock()
+_CACHE: list[dict[str, Any]] | None = None
+_CACHE_MAX = 1500
 
 
 def _path() -> Path:
@@ -41,6 +43,10 @@ def add_reaction(chat_id: str, vote: str, excerpt: str = "", message_id: str = "
     with _LOCK:
         with _path().open("a", encoding="utf-8") as f:
             f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+        if _CACHE is not None:
+            _CACHE.append(rec)
+            if len(_CACHE) > _CACHE_MAX:
+                del _CACHE[: len(_CACHE) - _CACHE_MAX]
     if v == "down":
         try:
             from memory.facts import add_fact
@@ -57,24 +63,33 @@ def add_reaction(chat_id: str, vote: str, excerpt: str = "", message_id: str = "
 
 
 def _iter_records() -> list[dict[str, Any]]:
+    global _CACHE
+    if _CACHE is not None:
+        return _CACHE
     path = _path()
     if not path.is_file():
-        return []
+        _CACHE = []
+        return _CACHE
     out: list[dict[str, Any]] = []
     try:
-        for line in path.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                rec = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if isinstance(rec, dict):
-                out.append(rec)
+        with path.open("r", encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rec = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(rec, dict):
+                    out.append(rec)
     except OSError:
-        return []
-    return out
+        _CACHE = []
+        return _CACHE
+    if len(out) > _CACHE_MAX:
+        out = out[-_CACHE_MAX:]
+    _CACHE = out
+    return _CACHE
 
 
 def votes_for_chat(chat_id: str) -> dict[str, str]:

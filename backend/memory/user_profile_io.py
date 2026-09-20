@@ -10,6 +10,8 @@ from config import data_root
 
 _LEGACY_PROFILE_PATH = Path(__file__).resolve().parent / "user_profile.json"
 _LOCK = threading.Lock()
+_PROFILE_CACHE: dict | None = None
+_PROFILE_MTIME: int | None = None
 
 
 def _profile_path() -> Path:
@@ -67,19 +69,30 @@ def deep_merge_defaults(data: dict | None) -> dict:
 
 
 def read_user_profile() -> dict:
+    global _PROFILE_CACHE, _PROFILE_MTIME
     path = _profile_path()
     if not path.is_file():
         return deep_merge_defaults(None)
+    try:
+        mt = path.stat().st_mtime_ns
+    except OSError:
+        mt = None
+    if _PROFILE_CACHE is not None and mt is not None and mt == _PROFILE_MTIME:
+        return copy.deepcopy(_PROFILE_CACHE)
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError):
         return deep_merge_defaults(None)
     if not isinstance(raw, dict):
         return deep_merge_defaults(None)
-    return deep_merge_defaults(raw)
+    merged = deep_merge_defaults(raw)
+    _PROFILE_CACHE = merged
+    _PROFILE_MTIME = mt
+    return copy.deepcopy(merged)
 
 
 def write_user_profile(data: dict) -> None:
+    global _PROFILE_CACHE, _PROFILE_MTIME
     merged = deep_merge_defaults(data)
     path = _profile_path()
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -90,6 +103,11 @@ def write_user_profile(data: dict) -> None:
             encoding="utf-8",
         )
         tmp.replace(path)
+        _PROFILE_CACHE = merged
+        try:
+            _PROFILE_MTIME = path.stat().st_mtime_ns
+        except OSError:
+            _PROFILE_MTIME = None
 
 
 def format_user_profile_for_prompt(max_chars: int = 1200) -> str:

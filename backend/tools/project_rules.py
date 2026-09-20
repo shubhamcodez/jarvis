@@ -5,6 +5,8 @@ from pathlib import Path
 
 from config import get_workspace_root
 
+_RULES_CACHE: dict[str, tuple[tuple[int, ...], str]] = {}
+
 _RULE_NAMES = (
     "JARVIS.md",
     "AGENTS.md",
@@ -24,6 +26,17 @@ def load_project_rules(max_chars: int = 8000, workspace_root: str | None = None)
     root = Path(raw)
     if not root.is_dir():
         return ""
+    mtimes: list[int] = []
+    for name in _RULE_NAMES:
+        p = root / name
+        try:
+            mtimes.append(p.stat().st_mtime_ns if p.is_file() else 0)
+        except OSError:
+            mtimes.append(0)
+    key = tuple(mtimes)
+    cached = _RULES_CACHE.get(raw)
+    if cached and cached[0] == key:
+        return cached[1]
     chunks: list[str] = []
     used = 0
     for name in _RULE_NAMES:
@@ -45,5 +58,8 @@ def load_project_rules(max_chars: int = 8000, workspace_root: str | None = None)
         chunks.append(block)
         used += len(block)
     if not chunks:
-        return ""
-    return "PROJECT RULES (authoritative; follow these):\n\n" + "\n\n".join(chunks)
+        text = ""
+    else:
+        text = "PROJECT RULES (authoritative; follow these):\n\n" + "\n\n".join(chunks)
+    _RULES_CACHE[raw] = (key, text)
+    return text

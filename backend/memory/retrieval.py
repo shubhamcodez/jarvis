@@ -25,6 +25,11 @@ def retrieve(
 ) -> List[SearchResult]:
     if not (query_text or "").strip():
         return []
+    try:
+        if len(store) == 0:
+            return []
+    except Exception:
+        pass
     query_embedding = embed_single(openai_api_key, query_text)
     if not query_embedding:
         return []

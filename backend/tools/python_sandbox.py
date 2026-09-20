@@ -137,7 +137,13 @@ def run_sandboxed_python(
             if time.monotonic() >= deadline:
                 _kill_proc(proc)
                 return {"ok": False, "error": f"timeout after {t}s", "stdout": "", "stderr": ""}
-            time.sleep(0.2)
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                continue
+            try:
+                proc.wait(timeout=min(0.25, remaining))
+            except subprocess.TimeoutExpired:
+                continue
         stdout, stderr = proc.communicate(timeout=2)
     except Exception as e:
         if proc is not None:

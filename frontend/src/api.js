@@ -156,6 +156,31 @@ export async function sendMessageStream(
   let buffer = ''
   let full = ''
   let toolUsed = null
+  let chunkBuf = ''
+  let rafId = 0
+  const flushChunks = () => {
+    rafId = 0
+    if (!chunkBuf) return
+    const t = chunkBuf
+    chunkBuf = ''
+    onChunk?.(t)
+  }
+  const queueChunk = (delta) => {
+    chunkBuf += delta
+    if (rafId) return
+    if (typeof requestAnimationFrame === 'function') {
+      rafId = requestAnimationFrame(flushChunks)
+    } else {
+      flushChunks()
+    }
+  }
+  const flushRemaining = () => {
+    if (rafId && typeof cancelAnimationFrame === 'function') {
+      cancelAnimationFrame(rafId)
+      rafId = 0
+    }
+    flushChunks()
+  }
   try {
   while (true) {
     const { value, done } = await reader.read()
@@ -190,7 +215,7 @@ export async function sendMessageStream(
           }
           if (data.delta != null) {
             full += data.delta
-            onChunk?.(data.delta)
+            queueChunk(data.delta)
           }
           if (data.done && data.reply != null) {
             full = data.reply
@@ -198,6 +223,7 @@ export async function sendMessageStream(
               toolUsed = data.tool_used
               onToolUsed?.(data.tool_used)
             }
+            flushRemaining()
             onDone?.(data.reply, data.file_edits ?? null)
             return {
               reply: data.reply,
@@ -212,9 +238,15 @@ export async function sendMessageStream(
       }
     }
   }
+  flushRemaining()
   if (full) onDone?.(full, null)
   return { reply: full, tool_used: toolUsed, file_edits: null, pending_approvals: null }
   } catch (err) {
+    if (rafId && typeof cancelAnimationFrame === 'function') {
+      cancelAnimationFrame(rafId)
+      rafId = 0
+    }
+    chunkBuf = ''
     if (err?.name === 'AbortError' || signal?.aborted) {
       const abortErr = err?.name === 'AbortError' ? err : new DOMException('Aborted', 'AbortError')
       throw abortErr

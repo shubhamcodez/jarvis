@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { memo, useMemo, useState } from 'react'
 import { mermaidFlowSvg } from './mermaidFlow'
 
 function unwrapFence(raw) {
@@ -35,7 +35,7 @@ export function isPreviewLanguage(lang) {
   )
 }
 
-export default function LivePreview({ language, children, className }) {
+function LivePreview({ language, children, className }) {
   const [tab, setTab] = useState('preview')
   const source = unwrapFence(children)
   const doc = useMemo(() => srcDocFor(language, source), [language, source])
@@ -70,3 +70,5 @@ export default function LivePreview({ language, children, className }) {
     </div>
   )
 }
+
+export default memo(LivePreview)

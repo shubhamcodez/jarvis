@@ -10,6 +10,8 @@ from typing import Any
 from config import chats_dir, data_root
 
 _LOCK = threading.Lock()
+_CACHE: list[dict[str, Any]] | None = None
+_CACHE_MTIME: int | None = None
 
 
 def _path() -> Path:
@@ -43,16 +45,28 @@ def _migrate_legacy() -> None:
 
 
 def list_bookmarks() -> list[dict[str, Any]]:
+    global _CACHE, _CACHE_MTIME
     with _LOCK:
         _migrate_legacy()
         p = _path()
         if not p.exists():
+            _CACHE = []
+            _CACHE_MTIME = None
             return []
         try:
+            mt = p.stat().st_mtime_ns
+        except OSError:
+            mt = None
+        if _CACHE is not None and mt is not None and mt == _CACHE_MTIME:
+            return list(_CACHE)
+        try:
             data = json.loads(p.read_text(encoding="utf-8"))
-            return data if isinstance(data, list) else []
+            items = data if isinstance(data, list) else []
         except (OSError, json.JSONDecodeError):
-            return []
+            items = []
+        _CACHE = items
+        _CACHE_MTIME = mt
+        return list(items)
 
 
 def add_bookmark(chat_id: str, content: str, title: str = "") -> dict[str, Any]:
@@ -76,6 +90,12 @@ def add_bookmark(chat_id: str, content: str, title: str = "") -> dict[str, Any]:
                 items = []
         items.insert(0, rec)
         _atomic_write(p, items[:200])
+        global _CACHE, _CACHE_MTIME
+        _CACHE = items[:200]
+        try:
+            _CACHE_MTIME = p.stat().st_mtime_ns
+        except OSError:
+            _CACHE_MTIME = None
     return rec
 
 
@@ -94,4 +114,10 @@ def remove_bookmark(bookmark_id: str) -> bool:
         if len(nxt) == len(items):
             return False
         _atomic_write(p, nxt)
+        global _CACHE, _CACHE_MTIME
+        _CACHE = nxt
+        try:
+            _CACHE_MTIME = p.stat().st_mtime_ns
+        except OSError:
+            _CACHE_MTIME = None
         return True

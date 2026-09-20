@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import re
+import time
 from pathlib import Path
 from typing import Any, Optional
 
@@ -17,12 +18,18 @@ COMMAND_DIRS = (
 )
 
 _NAME_RE = re.compile(r"^[a-zA-Z][a-zA-Z0-9:_-]{0,48}$")
+_CMD_CACHE: dict[str, tuple[float, list[dict[str, Any]]]] = {}
+_CMD_TTL = 8.0
 
 
 def discover_commands(workspace_root: Optional[str] = None, max_commands: int = 40) -> list[dict[str, Any]]:
     raw = (workspace_root or get_workspace_root() or "").strip()
     if not raw:
         return []
+    now = time.monotonic()
+    hit = _CMD_CACHE.get(raw)
+    if hit and now - hit[0] < _CMD_TTL:
+        return hit[1]
     root = Path(raw)
     if not root.is_dir():
         return []
@@ -32,7 +39,7 @@ def discover_commands(workspace_root: Optional[str] = None, max_commands: int = 
         base = root / rel
         if not base.is_dir():
             continue
-        for path in sorted(base.rglob("*.md")):
+        for path in base.rglob("*.md"):
             if path.name.upper() == "SKILL.MD":
                 continue
             try:
@@ -59,7 +66,9 @@ def discover_commands(workspace_root: Optional[str] = None, max_commands: int = 
                 }
             )
             if len(found) >= max_commands:
+                _CMD_CACHE[raw] = (now, found)
                 return found
+    _CMD_CACHE[raw] = (now, found)
     return found
 
 

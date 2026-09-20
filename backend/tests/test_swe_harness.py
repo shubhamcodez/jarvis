@@ -196,6 +196,24 @@ class TestAgentsInit(unittest.TestCase):
 
 
 class TestRewind(unittest.TestCase):
+    def test_unanswered_user_does_not_drop_prior_assistant(self):
+        dest = Path(tempfile.mkdtemp(prefix="ada-rew-"))
+        try:
+            with patch("memory.chat_log.chats_dir", return_value=dest):
+                from memory.chat_log import append_chat_log, create_new_chat, read_chat_log, rewind_chat
+
+                cid = create_new_chat()
+                append_chat_log("user", "hello", cid)
+                append_chat_log("assistant", "hi", cid)
+                append_chat_log("user", "again", cid)
+                out = rewind_chat(cid)
+                self.assertTrue(out.get("ok"), out)
+                msgs = read_chat_log(cid)
+                roles = [(m.get("role"), m.get("content")) for m in msgs]
+                self.assertEqual(roles, [("user", "hello"), ("assistant", "hi")])
+        finally:
+            shutil.rmtree(dest, ignore_errors=True)
+
     def test_drop_last_assistant(self):
         dest = Path(tempfile.mkdtemp(prefix="ada-rew-"))
         try:

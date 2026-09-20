@@ -33,6 +33,11 @@ IGNORE_DIR_NAMES = frozenset(
         ".cargo",
         ".idea",
         ".vscode",
+        "coverage",
+        ".ruff_cache",
+        "out",
+        "__MACOSX",
+        ".gradle",
     }
 )
 

@@ -30,6 +30,7 @@ def compact_history(
     and remaining contents are tail-clipped.
     """
     rows = []
+    costs: list[int] = []
     for m in messages or []:
         if (m.get("role") or "") not in ("user", "assistant") or _is_prior_summary(m):
             continue
@@ -37,22 +38,25 @@ def compact_history(
         if (m.get("role") or "") == "assistant" and is_agent_trace(body):
             body = summarize_agent_trace(body)
         rows.append({**m, "content": body})
+        costs.append(estimate_tokens(body))
     stats = {
         "original_messages": len(rows),
-        "original_tokens": sum(estimate_tokens(str(m.get("content") or "")) for m in rows),
+        "original_tokens": sum(costs),
         "compacted": False,
     }
     if not rows or stats["original_tokens"] <= token_budget:
         return rows, stats
 
     recent = rows[-keep_recent:] if len(rows) > keep_recent else list(rows)
+    recent_costs = costs[-keep_recent:] if len(costs) > keep_recent else list(costs)
     older = rows[:-keep_recent] if len(rows) > keep_recent else []
 
-    def _recent_tokens(items: list[dict]) -> int:
-        return sum(estimate_tokens(str(m.get("content") or "")) for m in items)
+    def _recent_tokens(items_costs: list[int]) -> int:
+        return sum(items_costs)
 
-    while len(recent) > 2 and _recent_tokens(recent) > token_budget:
+    while len(recent) > 2 and _recent_tokens(recent_costs) > token_budget:
         older.append(recent.pop(0))
+        recent_costs.pop(0)
 
     clipped: list[dict] = []
     remain = token_budget
@@ -73,7 +77,7 @@ def compact_history(
         clipped.append({**m, "content": body})
         remain -= cost
     recent = list(reversed(clipped))
-    recent_tokens = _recent_tokens(recent)
+    recent_tokens = sum(estimate_tokens(str(m.get("content") or "")) for m in recent)
     summary_budget = max(80, token_budget - recent_tokens - 40)
 
     lines = [f"{_SUMMARY_PREFIX}{len(older)} messages, compacted):"]

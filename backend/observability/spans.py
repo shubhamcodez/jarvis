@@ -121,11 +121,13 @@ def _append(record: dict[str, Any]) -> None:
 
 def _rotate(path: Path) -> None:
     try:
-        lines = path.read_text(encoding="utf-8").splitlines()
-        keep = lines[-(len(lines) // 2) :] if len(lines) > 2000 else lines
-        tmp = path.with_suffix(".jsonl.tmp")
-        tmp.write_text("\n".join(keep) + "\n", encoding="utf-8")
-        tmp.replace(path)
+        rotated = path.with_suffix(".jsonl.1")
+        try:
+            rotated.unlink(missing_ok=True)
+        except TypeError:
+            if rotated.exists():
+                rotated.unlink()
+        path.replace(rotated)
     except OSError:
         pass
 

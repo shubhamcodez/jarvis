@@ -2,8 +2,12 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Optional
 
 from config import data_root
+
+_CACHE: Optional[dict[str, str]] = None
+_CACHE_KEY: Optional[tuple[int, int, int]] = None
 
 _DEFAULT_SOUL = """# SOUL
 
@@ -51,20 +55,41 @@ def _ensure(name: str, default: str) -> Path:
     return path
 
 
+def _mtime_key() -> tuple[int, int, int]:
+    d = identity_dir()
+    keys: list[int] = []
+    for name in ("SOUL.md", "USER.md", "MEMORY.md"):
+        p = d / name
+        try:
+            keys.append(p.stat().st_mtime_ns)
+        except OSError:
+            keys.append(0)
+    return (keys[0], keys[1], keys[2])
+
+
 def read_identity() -> dict[str, str]:
+    global _CACHE, _CACHE_KEY
+    key = _mtime_key()
+    if _CACHE is not None and _CACHE_KEY == key:
+        return _CACHE
     soul = _ensure("SOUL.md", _DEFAULT_SOUL).read_text(encoding="utf-8")
     user = _ensure("USER.md", _DEFAULT_USER).read_text(encoding="utf-8")
     memory = _ensure("MEMORY.md", _DEFAULT_MEMORY).read_text(encoding="utf-8")
-    return {"soul": soul, "user": user, "memory": memory}
+    _CACHE = {"soul": soul, "user": user, "memory": memory}
+    _CACHE_KEY = _mtime_key()
+    return _CACHE
 
 
 def write_identity(*, soul: str | None = None, user: str | None = None, memory: str | None = None) -> dict[str, str]:
+    global _CACHE, _CACHE_KEY
     if soul is not None:
         _ensure("SOUL.md", _DEFAULT_SOUL).write_text(soul, encoding="utf-8")
     if user is not None:
         _ensure("USER.md", _DEFAULT_USER).write_text(user, encoding="utf-8")
     if memory is not None:
         _ensure("MEMORY.md", _DEFAULT_MEMORY).write_text(memory, encoding="utf-8")
+    _CACHE = None
+    _CACHE_KEY = None
     return read_identity()
 
 

@@ -11,11 +11,8 @@ def estimate_tokens(text: str) -> int:
     t = text or ""
     if not t:
         return 0
-    non_ascii = 0
-    for ch in t:
-        if ord(ch) > 127:
-            non_ascii += 1
-    ascii_n = len(t) - non_ascii
+    ascii_n = len(t.encode("ascii", "ignore"))
+    non_ascii = len(t) - ascii_n
     return max(1, (ascii_n + 2) // 3 + non_ascii)
 
 

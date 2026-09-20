@@ -2,6 +2,16 @@ import { useMemo, useState, useEffect } from 'react'
 
 function buildTree(rootLabel, fileRelPaths) {
   const root = { name: rootLabel, path: '', kind: 'dir', children: [] }
+  const childMaps = new WeakMap()
+  const childByName = (parent, name) => childMaps.get(parent)?.get(name)
+  const rememberChild = (parent, child) => {
+    let m = childMaps.get(parent)
+    if (!m) {
+      m = new Map()
+      childMaps.set(parent, m)
+    }
+    m.set(child.name, child)
+  }
   const sorted = [...fileRelPaths].sort((a, b) =>
     a.localeCompare(b, undefined, { sensitivity: 'base' }),
   )
@@ -20,7 +30,7 @@ function buildTree(rootLabel, fileRelPaths) {
       acc.push(part)
       const subPath = acc.join('/')
       if (!node.children) node.children = []
-      let child = node.children.find((c) => c.name === part)
+      let child = childByName(node, part)
       if (!child) {
         child = {
           name: part,
@@ -29,6 +39,7 @@ function buildTree(rootLabel, fileRelPaths) {
           children: isFile ? undefined : [],
         }
         node.children.push(child)
+        rememberChild(node, child)
       } else if (!isFile && child.kind === 'file') {
         child.kind = 'dir'
         child.children = child.children || []
@@ -147,10 +158,14 @@ function FileTreeRows({ nodes, depth, expanded, toggle, onFileOpen, activePath }
 
 /** VS Code–style explorer for indexed / linked project files. */
 export function ProjectFileTree({ rootLabel, relPaths, onFileOpen, activePath }) {
+  const relSig =
+    relPaths?.length
+      ? `${relPaths.length}:${relPaths.slice(0, 3).join('|')}:${relPaths.slice(-3).join('|')}`
+      : ''
   const tree = useMemo(() => {
     if (!rootLabel?.trim() || !relPaths?.length) return null
     return buildTree(rootLabel.trim(), relPaths)
-  }, [rootLabel, relPaths])
+  }, [rootLabel, relPaths, relSig])
 
   const [expanded, setExpanded] = useState(() => new Set(['']))
 
@@ -167,9 +182,12 @@ export function ProjectFileTree({ rootLabel, relPaths, onFileOpen, activePath })
     })
   }
 
-  if (!tree?.children?.length) return null
+  const fileCount = useMemo(
+    () => (relPaths || []).filter((p) => !String(p).endsWith('/')).length,
+    [relPaths],
+  )
 
-  const fileCount = relPaths.filter((p) => !String(p).endsWith('/')).length
+  if (!tree?.children?.length) return null
 
   return (
     <div className="repo-file-tree" aria-label="Project files" role="tree">

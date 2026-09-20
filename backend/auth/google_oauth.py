@@ -22,7 +22,7 @@ from dotenv import load_dotenv
 # Repo root: backend/auth/google_oauth.py -> parents[2]
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _dotenv_override = (
-    os.environ.get("ADA_DOTENV_PATH") or os.environ.get("JARVIS_DOTENV_PATH") or ""
+    os.environ.get("JARVIS_DOTENV_PATH") or os.environ.get("ADA_DOTENV_PATH") or ""
 ).strip()
 if _dotenv_override:
     load_dotenv(Path(_dotenv_override).expanduser(), encoding="utf-8")

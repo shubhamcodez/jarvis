@@ -82,19 +82,37 @@ def ensure_dirs() -> None:
     _migrate_legacy()
 
 
+def _tail_lines(path: Path, max_lines: int) -> list[str]:
+    try:
+        size = path.stat().st_size
+    except OSError:
+        return []
+    if size <= 0:
+        return []
+    take = min(size, max(max_lines, 1) * 900)
+    try:
+        with path.open("rb") as fh:
+            if size > take:
+                fh.seek(-take, 2)
+            data = fh.read().decode("utf-8", errors="replace")
+    except OSError:
+        return []
+    lines = data.splitlines()
+    if size > take and lines:
+        lines = lines[1:]
+    return lines[-max_lines:]
+
+
 def read_jsonl_records(*relative: str, limit: int = 200) -> list[dict]:
     """Tail-merge Jarvis + leftover Ada jsonl, oldest first, then clip to limit."""
     import json
 
     rows: list[dict] = []
+    want = max(limit * 4, 200)
     for path in jsonl_read_paths(*relative):
         if not path.exists():
             continue
-        try:
-            chunk = path.read_text(encoding="utf-8").splitlines()[-max(limit * 4, 200) :]
-        except OSError:
-            continue
-        for line in chunk:
+        for line in _tail_lines(path, want):
             if not line.strip():
                 continue
             try:

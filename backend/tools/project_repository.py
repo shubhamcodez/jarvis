@@ -28,6 +28,7 @@ _SKIP_DIR_NAMES = frozenset(
         "__MACOSX",
         ".gradle",
         ".cargo",
+        ".vscode",
     }
 )
 
@@ -197,9 +198,9 @@ def build_repository_snapshot(path_str: str) -> str:
 
     try:
         for dirpath, dirnames, filenames in os.walk(root, topdown=True):
-            dirnames[:] = sorted(
+            dirnames[:] = [
                 d for d in dirnames if d not in _SKIP_DIR_NAMES and not d.startswith(".")
-            )
+            ]
             rel_dir = Path(dirpath).relative_to(root)
             depth = len(rel_dir.parts)
             if depth > MAX_DEPTH:
@@ -211,7 +212,7 @@ def build_repository_snapshot(path_str: str) -> str:
                 line = f"{prefix}{posix_dir}/"
                 subdirs.append((posix_dir.lower(), line))
 
-            for fn in sorted(filenames):
+            for fn in filenames:
                 if fn.startswith("."):
                     continue
                 rp = rel_dir / fn if rel_dir.parts else Path(fn)
@@ -223,7 +224,12 @@ def build_repository_snapshot(path_str: str) -> str:
                 except OSError:
                     size = -1
                 posix_f = rp.as_posix()
-                peek = _file_peek_line(abs_f) if size != 0 else "[empty]"
+                if size == 0:
+                    peek = "[empty]"
+                elif _want_file_body(rp):
+                    peek = "[excerpt below]"
+                else:
+                    peek = _file_peek_line(abs_f)
                 size_note = f"{size} bytes" if size >= 0 else "unknown size"
                 idx_line = f"{prefix}{posix_f} | {size_note} | {peek}"
                 files_meta.append((posix_f.lower(), idx_line, rp))

@@ -11,6 +11,8 @@ from typing import Any, Optional
 from config import chats_dir, data_root
 
 _LOCK = threading.Lock()
+_CACHE: dict[str, Any] | None = None
+_CACHE_MTIME: int | None = None
 
 _OPEN = frozenset({"pending", "active", "blocked", "waiting_approval", "paused"})
 _STATUSES = _OPEN | frozenset({"complete", "completed", "error", "cancelled", "canceled", "skipped"})
@@ -34,23 +36,42 @@ def _empty() -> dict[str, Any]:
 
 
 def _load() -> dict[str, Any]:
+    global _CACHE, _CACHE_MTIME
     path = _path()
     if not path.exists():
-        return _empty()
+        _CACHE = _empty()
+        _CACHE_MTIME = None
+        return _CACHE
+    try:
+        mt = path.stat().st_mtime_ns
+    except OSError:
+        mt = None
+    if _CACHE is not None and mt is not None and mt == _CACHE_MTIME:
+        return _CACHE
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
         if isinstance(data, dict) and isinstance(data.get("tasks"), list):
+            _CACHE = data
+            _CACHE_MTIME = mt
             return data
     except (OSError, json.JSONDecodeError):
         pass
-    return _empty()
+    _CACHE = _empty()
+    _CACHE_MTIME = mt
+    return _CACHE
 
 
 def _save(data: dict[str, Any]) -> None:
+    global _CACHE, _CACHE_MTIME
     path = _path()
     tmp = path.with_suffix(".tmp")
-    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp.write_text(json.dumps(data, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
     tmp.replace(path)
+    _CACHE = data
+    try:
+        _CACHE_MTIME = path.stat().st_mtime_ns
+    except OSError:
+        _CACHE_MTIME = None
 
 
 def _public(task: dict[str, Any]) -> dict[str, Any]:

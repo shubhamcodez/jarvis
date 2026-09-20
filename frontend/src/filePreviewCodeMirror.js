@@ -12,17 +12,26 @@ import { defaultHighlightStyle, syntaxHighlighting } from '@codemirror/language'
 import { oneDark } from '@codemirror/theme-one-dark'
 import { EditorView } from '@codemirror/view'
 
+const LANG_HTML = [html()]
+const LANG_CSS = [css()]
+const LANG_TSX = [javascript({ jsx: true, typescript: true })]
+const LANG_TS = [javascript({ typescript: true })]
+const LANG_JSX = [javascript({ jsx: true })]
+const LANG_JS = [javascript()]
+const LANG_PY = [python()]
+const LANG_NONE = []
+
 /** Lezer-based highlighting for paths we recognize; empty → plain text (no highlighting). */
 export function languageExtensionsForPath(relPath) {
   const base = (String(relPath).split(/[/\\]/).pop() || '').toLowerCase()
-  if (base.endsWith('.html') || base.endsWith('.htm')) return [html()]
-  if (base.endsWith('.css')) return [css()]
-  if (base.endsWith('.tsx')) return [javascript({ jsx: true, typescript: true })]
-  if (base.endsWith('.ts')) return [javascript({ typescript: true })]
-  if (base.endsWith('.jsx')) return [javascript({ jsx: true })]
-  if (base.endsWith('.js') || base.endsWith('.mjs') || base.endsWith('.cjs')) return [javascript()]
-  if (base.endsWith('.py') || base.endsWith('.pyw')) return [python()]
-  return []
+  if (base.endsWith('.html') || base.endsWith('.htm')) return LANG_HTML
+  if (base.endsWith('.css')) return LANG_CSS
+  if (base.endsWith('.tsx')) return LANG_TSX
+  if (base.endsWith('.ts')) return LANG_TS
+  if (base.endsWith('.jsx')) return LANG_JSX
+  if (base.endsWith('.js') || base.endsWith('.mjs') || base.endsWith('.cjs')) return LANG_JS
+  if (base.endsWith('.py') || base.endsWith('.pyw')) return LANG_PY
+  return LANG_NONE
 }
 
 /** Tokens roughly aligned with app light theme (theme.css --bg-deep / --text-primary). */
@@ -68,8 +77,10 @@ const adaDarkTypography = EditorView.theme(
   { dark: true },
 )
 
+const DARK_EXTENSIONS = [oneDark, adaDarkTypography]
+
 /** Dark: one-dark + app typography; light: GitHub-like chrome + default highlight styles. */
 export function themeExtensionsForScheme(colorScheme) {
   if (colorScheme === 'light') return adaLightTheme
-  return [oneDark, adaDarkTypography]
+  return DARK_EXTENSIONS
 }

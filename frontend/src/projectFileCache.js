@@ -28,16 +28,58 @@ function makeImageKey(rootLabel, relPath) {
   return `${String(rootLabel).trim()}\x1fimg\x1f${normRel(relPath)}`
 }
 
+let dbPromise = null
+
+const TEXT_LRU_MAX = 40
+const TEXT_LRU = new Map()
+
+function lruTouchText(key) {
+  const v = TEXT_LRU.get(key)
+  TEXT_LRU.delete(key)
+  TEXT_LRU.set(key, v)
+  return v
+}
+
+function lruSetText(key, value) {
+  if (TEXT_LRU.has(key)) TEXT_LRU.delete(key)
+  TEXT_LRU.set(key, value)
+  while (TEXT_LRU.size > TEXT_LRU_MAX) {
+    TEXT_LRU.delete(TEXT_LRU.keys().next().value)
+  }
+}
+
+function closeDbOnError(db) {
+  dbPromise = null
+  if (!db) return
+  try {
+    db.close()
+  } catch {
+    /* ignore */
+  }
+}
+
 function openDb() {
-  return new Promise((resolve, reject) => {
-    const req = indexedDB.open(DB_NAME, DB_VERSION)
-    req.onerror = () => reject(req.error)
-    req.onupgradeneeded = () => {
-      const db = req.result
-      if (!db.objectStoreNames.contains(STORE)) db.createObjectStore(STORE)
-    }
-    req.onsuccess = () => resolve(req.result)
-  })
+  if (!dbPromise) {
+    dbPromise = new Promise((resolve, reject) => {
+      const req = indexedDB.open(DB_NAME, DB_VERSION)
+      req.onerror = () => {
+        dbPromise = null
+        reject(req.error)
+      }
+      req.onupgradeneeded = () => {
+        const db = req.result
+        if (!db.objectStoreNames.contains(STORE)) db.createObjectStore(STORE)
+      }
+      req.onsuccess = () => {
+        const db = req.result
+        db.onclose = () => {
+          dbPromise = null
+        }
+        resolve(db)
+      }
+    })
+  }
+  return dbPromise
 }
 
 /** @returns {Promise<boolean>} */
@@ -45,6 +87,8 @@ export async function putPreviewFileText(rootLabel, relPath, text) {
   const label = String(rootLabel || '').trim()
   const rel = normRel(relPath)
   if (!label || !rel) return false
+  const stored = typeof text === 'string' ? text : String(text ?? '')
+  lruSetText(makeKey(label, rel), stored)
   let db
   try {
     db = await openDb()
@@ -54,18 +98,13 @@ export async function putPreviewFileText(rootLabel, relPath, text) {
   return new Promise((resolve, reject) => {
     const tx = db.transaction(STORE, 'readwrite')
     tx.oncomplete = () => {
-      db.close()
       resolve(true)
     }
     tx.onerror = () => {
-      try {
-        db.close()
-      } catch {
-        /* ignore */
-      }
+      closeDbOnError(db)
       reject(tx.error)
     }
-    tx.objectStore(STORE).put(typeof text === 'string' ? text : String(text ?? ''), makeKey(label, rel))
+    tx.objectStore(STORE).put(stored, makeKey(label, rel))
   }).catch(() => false)
 }
 
@@ -84,12 +123,11 @@ export async function getPreviewImageDataUrl(rootLabel, relPath) {
     const tx = db.transaction(STORE, 'readonly')
     const getReq = tx.objectStore(STORE).get(makeImageKey(label, rel))
     getReq.onsuccess = () => {
-      db.close()
       const v = getReq.result
       resolve(typeof v === 'string' && v.startsWith('data:') ? v : null)
     }
     getReq.onerror = () => {
-      db.close()
+      closeDbOnError(db)
       reject(getReq.error)
     }
   }).catch(() => null)
@@ -100,6 +138,14 @@ export async function getPreviewFileText(rootLabel, relPath) {
   const label = String(rootLabel || '').trim()
   const rel = normRel(relPath)
   if (!label || !rel) return null
+  const cacheKey = makeKey(label, rel)
+  if (TEXT_LRU.has(cacheKey)) {
+    const hit = lruTouchText(cacheKey)
+    // #region agent log
+    fetch('http://127.0.0.1:7379/ingest/d4a6c664-f167-437c-bb75-f8687c530271',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'1e8c6b'},body:JSON.stringify({sessionId:'1e8c6b',location:'projectFileCache.js:getPreviewFileText',message:'text LRU hit',data:{rel,lruSize:TEXT_LRU.size},timestamp:Date.now(),hypothesisId:'C'})}).catch(()=>{});
+    // #endregion
+    return hit
+  }
   let db
   try {
     db = await openDb()
@@ -108,14 +154,15 @@ export async function getPreviewFileText(rootLabel, relPath) {
   }
   return new Promise((resolve, reject) => {
     const tx = db.transaction(STORE, 'readonly')
-    const getReq = tx.objectStore(STORE).get(makeKey(label, rel))
+    const getReq = tx.objectStore(STORE).get(cacheKey)
     getReq.onsuccess = () => {
-      db.close()
       const v = getReq.result
-      resolve(typeof v === 'string' ? v : null)
+      const text = typeof v === 'string' ? v : null
+      if (text != null) lruSetText(cacheKey, text)
+      resolve(text)
     }
     getReq.onerror = () => {
-      db.close()
+      closeDbOnError(db)
       reject(getReq.error)
     }
   }).catch(() => null)
@@ -130,7 +177,11 @@ function putMany(db, rootLabel, relToText) {
     tx.onerror = () => reject(tx.error)
     const store = tx.objectStore(STORE)
     for (const [rel, text] of relToText) {
-      if (text) store.put(text, makeKey(label, rel))
+      if (text) {
+        const key = makeKey(label, rel)
+        store.put(text, key)
+        lruSetText(key, text)
+      }
     }
   })
 }
@@ -152,13 +203,16 @@ function putImageMany(db, rootLabel, relToDataUrl) {
 export async function clearPreviewCacheForRoot(rootLabel) {
   const label = String(rootLabel || '').trim()
   if (!label) return
+  const prefix = `${label}\x1f`
+  for (const key of [...TEXT_LRU.keys()]) {
+    if (key.startsWith(prefix)) TEXT_LRU.delete(key)
+  }
   let db
   try {
     db = await openDb()
   } catch {
     return
   }
-  const prefix = `${label}\x1f`
   try {
     await new Promise((resolve, reject) => {
       const tx = db.transaction(STORE, 'readwrite')
@@ -177,13 +231,7 @@ export async function clearPreviewCacheForRoot(rootLabel) {
       tx.onerror = () => reject(tx.error)
     })
   } catch {
-    /* ignore */
-  } finally {
-    try {
-      db.close()
-    } catch {
-      /* ignore */
-    }
+    closeDbOnError(db)
   }
 }
 
@@ -237,11 +285,7 @@ export async function cachePreviewFilesFromRecords(rootLabel, records) {
       const pairs = reads.filter(Boolean)
       if (pairs.length) await putImageMany(db, label, pairs)
     }
-  } finally {
-    try {
-      db.close()
-    } catch {
-      /* ignore */
-    }
+  } catch {
+    closeDbOnError(db)
   }
 }

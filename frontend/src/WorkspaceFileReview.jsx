@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { applyPatch, structuredPatch } from 'diff'
-import { useLoadedWorkspaceFiles } from './workspaceReviewData'
+import { applyPatch } from 'diff'
+import { getOrBuildPatch, useLoadedWorkspaceFiles } from './workspaceReviewData'
 
 /**
  * Apply only accepted hunks from a structured patch. Returns null if patch application fails.
  */
 export function mergeWithAcceptedHunks(base, proposed, acceptedHunkIndices) {
-  const patch = structuredPatch('a', 'b', base ?? '', proposed ?? '', 'a', 'b', { context: 2 })
+  const patch = getOrBuildPatch(base, proposed)
   const all = patch.hunks || []
   if (all.length === 0) return (proposed ?? '') === (base ?? '') ? base : proposed
   const set = new Set(acceptedHunkIndices)
@@ -75,7 +75,7 @@ export function WorkspaceFileReview({
           next.set(path, prev.get(path))
           continue
         }
-        const patch = structuredPatch(path, path, base, proposed, path, path, { context: 2 })
+        const patch = getOrBuildPatch(base, proposed)
         const n = patch.hunks?.length ?? 0
         next.set(path, n ? new Set(Array.from({ length: n }, (_, i) => i)) : new Set())
       }
@@ -94,15 +94,7 @@ export function WorkspaceFileReview({
 
   const patch = useMemo(() => {
     if (!active) return null
-    return structuredPatch(
-      active.path,
-      active.path,
-      active.base,
-      active.proposed,
-      active.path,
-      active.path,
-      { context: 2 },
-    )
+    return getOrBuildPatch(active.base, active.proposed)
   }, [active])
 
   const hunks = patch?.hunks || []

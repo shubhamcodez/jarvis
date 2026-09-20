@@ -842,7 +842,7 @@ async def send_message(body: SendMessageRequest, request: Request):
             if await request.is_disconnected():
                 cancel_run(ns_run_id, "client_disconnect")
                 return
-            await asyncio.sleep(0.25)
+            await asyncio.sleep(1.0)
 
     watch = asyncio.create_task(_watch_disconnect())
     try:
@@ -1610,14 +1610,14 @@ async def api_new_chat():
 
 @app.get("/chat/list")
 async def api_list_chats():
-    return list_chats()
+    return await asyncio.to_thread(list_chats)
 
 
 @app.get("/chat/search")
 async def api_search_chats(q: str = Query("", min_length=0), limit: int = 30):
     from memory.chat_search import search_chats
 
-    return {"hits": search_chats(q, limit=limit)}
+    return {"hits": await asyncio.to_thread(search_chats, q, limit=limit)}
 
 
 @app.post("/chat/compact")
@@ -1830,7 +1830,7 @@ async def api_get_current_chat_id():
 @app.get("/chat/read/{chat_id}")
 async def api_read_chat_log(chat_id: str):
     try:
-        return read_chat_log(chat_id)
+        return await asyncio.to_thread(read_chat_log, chat_id)
     except InvalidChatId as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -1923,13 +1923,12 @@ async def api_memory_ingest(body: IngestChatRequest):
 async def api_memory_status():
     """Episodic store size, fact count, and context token budgets."""
     from config import get_context_budgets
-    from memory.facts import list_facts
+    from memory.facts import fact_count
 
     store = get_memory_store()
-    facts = list_facts(limit=200)
     return {
         "episodic_chunks": len(store),
-        "facts": len(facts),
+        "facts": fact_count(),
         "budgets": get_context_budgets(),
         "persistent": True,
         "hybrid_search": True,
@@ -2172,7 +2171,7 @@ async def api_workspace_snapshot():
     from tools.workspace_io import snapshot as ws_snapshot
 
     try:
-        return ws_snapshot()
+        return await asyncio.to_thread(ws_snapshot)
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
@@ -2202,7 +2201,8 @@ async def api_workspace_list():
     from tools.workspace_io import list_tree_paths
 
     try:
-        return {"ok": True, "paths": list_tree_paths()}
+        paths = await asyncio.to_thread(list_tree_paths)
+        return {"ok": True, "paths": paths}
     except Exception as e:
         return {"ok": False, "error": str(e), "paths": []}
 
@@ -2212,7 +2212,7 @@ async def api_workspace_tree_stamp():
     from tools.workspace_io import tree_stamp
 
     try:
-        return tree_stamp()
+        return await asyncio.to_thread(tree_stamp)
     except Exception as e:
         return {"ok": False, "error": str(e), "stamp": "", "count": 0}
 

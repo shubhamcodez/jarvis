@@ -1,10 +1,9 @@
 import { useMemo } from 'react'
-import { structuredPatch } from 'diff'
-import { countPatchLines, useLoadedWorkspaceFiles } from './workspaceReviewData'
+import { countPatchLines, getOrBuildPatch, useLoadedWorkspaceFiles } from './workspaceReviewData'
 
 
 function miniDiffPreview(base, proposed, maxLines = 6) {
-  const patch = structuredPatch('a', 'b', base ?? '', proposed ?? '', 'a', 'b', { context: 1 })
+  const patch = getOrBuildPatch(base, proposed)
   const lines = []
   for (const h of patch.hunks || []) {
     for (const line of h.lines || []) {

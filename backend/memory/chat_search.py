@@ -17,17 +17,25 @@ def search_chats(query: str, limit: int = 30) -> list[dict[str, Any]]:
         msgs = read_chat_log(cid)[-80:]
         snippet = ""
         score = 0
-        if q in title.lower():
+        title_l = title.lower()
+        if q in title_l:
             score += 5
             snippet = title
         for m in msgs:
+            if (m.get("role") or "") == "tool":
+                continue
             body = (m.get("content") or "")
-            if q in body.lower():
+            if len(body) > 4000:
+                body = body[:4000]
+            body_l = body.lower()
+            if q in body_l:
                 score += 1
                 if not snippet:
-                    idx = body.lower().find(q)
+                    idx = body_l.find(q)
                     start = max(0, idx - 40)
                     snippet = body[start : start + 160].replace("\n", " ")
+                if score >= 12:
+                    break
         if score:
             hits.append(
                 {

@@ -4,6 +4,18 @@ function unwrap(raw) {
   return String(raw ?? '').replace(/^\n/, '').replace(/\n$/, '')
 }
 
+const FLOW_CACHE_CAP = 32
+const parseCache = new Map()
+const svgCache = new Map()
+
+function cacheSet(map, key, value) {
+  if (map.has(key)) map.delete(key)
+  map.set(key, value)
+  while (map.size > FLOW_CACHE_CAP) {
+    map.delete(map.keys().next().value)
+  }
+}
+
 function takeNode(id, label, shape, nodes) {
   if (!id) return
   const prev = nodes.get(id)
@@ -12,6 +24,22 @@ function takeNode(id, label, shape, nodes) {
     label: label || prev?.label || id,
     shape: shape || prev?.shape || 'rect',
   })
+}
+
+function parseEdgeLine(line) {
+  let m = line.match(/^(.+?)\s*-->\|([^|]+)\|\s*(.+)$/)
+  if (m) return { a: m[1], b: m[3], label: m[2] }
+  m = line.match(/^(.+?)\s*--\s+(.+?)\s+-->\s*(.+)$/)
+  if (m) return { a: m[1], b: m[3], label: m[2] }
+  m = line.match(/^(.+?)\s*-->\s*(.+)$/)
+  if (m) return { a: m[1], b: m[2], label: '' }
+  m = line.match(/^(.+?)\s*-\.(?:([^.]+)\.)?->\s*(.+)$/)
+  if (m) return { a: m[1], b: m[3], label: (m[2] || '').trim() }
+  m = line.match(/^(.+?)\s*==(?:([^=]+)=+)?>\s*(.+)$/)
+  if (m) return { a: m[1], b: m[3], label: (m[2] || '').trim() }
+  m = line.match(/^(.+?)\s*---\s*(.+)$/)
+  if (m) return { a: m[1], b: m[2], label: '' }
+  return null
 }
 
 function parseNodeToken(tok) {
@@ -28,13 +56,21 @@ function parseNodeToken(tok) {
 }
 
 export function parseMermaidFlow(src) {
+  const cacheKey = String(src ?? '')
+  if (parseCache.has(cacheKey)) return parseCache.get(cacheKey)
   const lines = unwrap(src)
     .split(/\r?\n/)
     .map((l) => l.trim())
     .filter((l) => l && !l.startsWith('%%'))
-  if (!lines.length) return null
+  if (!lines.length) {
+    cacheSet(parseCache, cacheKey, null)
+    return null
+  }
   const header = lines[0]
-  if (!/^(graph|flowchart)\b/i.test(header)) return null
+  if (!/^(graph|flowchart)\b/i.test(header)) {
+    cacheSet(parseCache, cacheKey, null)
+    return null
+  }
   const dir = (/(\bLR\b|\bRL\b|\bTB\b|\bTD\b|\bBT\b)/i.exec(header) || ['TD'])[0].toUpperCase()
   const afterDir = header
     .replace(/^(graph|flowchart)\b/i, '')
@@ -47,26 +83,28 @@ export function parseMermaidFlow(src) {
   const nodes = new Map()
   const edges = []
   for (const line of [...inline, ...lines.slice(1)]) {
-    const edge = line.match(
-      /^(.+?)\s*-->(?:\|([^|]+)\|)?\s*(.+)$/,
-    )
+    const edge = parseEdgeLine(line)
     if (edge) {
-      const a = parseNodeToken(edge[1])
-      const b = parseNodeToken(edge[3])
+      const a = parseNodeToken(edge.a)
+      const b = parseNodeToken(edge.b)
       if (!a || !b) continue
       takeNode(a.id, a.label, a.shape, nodes)
       takeNode(b.id, b.label, b.shape, nodes)
-      edges.push({ from: a.id, to: b.id, label: (edge[2] || '').trim() })
+      edges.push({ from: a.id, to: b.id, label: (edge.label || '').trim() })
       continue
     }
     const only = parseNodeToken(line)
     if (only) takeNode(only.id, only.label, only.shape, nodes)
   }
-  if (!nodes.size) return null
+  if (!nodes.size) {
+    cacheSet(parseCache, cacheKey, null)
+    return null
+  }
   const parsed = { dir: dir === 'TD' ? 'TB' : dir, nodes: [...nodes.values()], edges }
   // #region agent log
   fetch('http://127.0.0.1:7379/ingest/d4a6c664-f167-437c-bb75-f8687c530271',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'ff2cb7'},body:JSON.stringify({sessionId:'ff2cb7',location:'mermaidFlow.js:parseMermaidFlow',message:'parsed mermaid',data:{dir:parsed.dir,nodeCount:parsed.nodes.length,edgeCount:parsed.edges.length,inlineCount:inline.length},timestamp:Date.now(),hypothesisId:'D'})}).catch(()=>{})
   // #endregion
+  cacheSet(parseCache, cacheKey, parsed)
   return parsed
 }
 
@@ -82,19 +120,39 @@ function mermaidUnsupportedSvg(src) {
 }
 
 export function mermaidFlowSvg(src) {
+  const cacheKey = String(src ?? '')
+  if (svgCache.has(cacheKey)) {
+    // #region agent log
+    fetch('http://127.0.0.1:7379/ingest/d4a6c664-f167-437c-bb75-f8687c530271',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'1e8c6b'},body:JSON.stringify({sessionId:'1e8c6b',location:'mermaidFlow.js:mermaidFlowSvg',message:'svg cache hit',data:{keyLen:cacheKey.length,cacheSize:svgCache.size},timestamp:Date.now(),hypothesisId:'C'})}).catch(()=>{});
+    // #endregion
+    return svgCache.get(cacheKey)
+  }
   const g = parseMermaidFlow(src)
-  if (!g) return mermaidUnsupportedSvg(src)
+  if (!g) {
+    const unsupported = mermaidUnsupportedSvg(src)
+    cacheSet(svgCache, cacheKey, unsupported)
+    return unsupported
+  }
   const horizontal = g.dir === 'LR' || g.dir === 'RL'
   const rank = new Map()
   const incoming = new Map(g.nodes.map((n) => [n.id, 0]))
-  for (const e of g.edges) incoming.set(e.to, (incoming.get(e.to) || 0) + 1)
+  const adj = new Map()
+  for (const e of g.edges) {
+    incoming.set(e.to, (incoming.get(e.to) || 0) + 1)
+    let list = adj.get(e.from)
+    if (!list) {
+      list = []
+      adj.set(e.from, list)
+    }
+    list.push(e)
+  }
   const roots = g.nodes.filter((n) => !incoming.get(n.id)).map((n) => n.id)
   const q = roots.length ? roots : [g.nodes[0].id]
   for (const id of q) if (!rank.has(id)) rank.set(id, 0)
   for (let i = 0; i < q.length; i += 1) {
     const id = q[i]
     const r = rank.get(id) || 0
-    for (const e of g.edges.filter((x) => x.from === id)) {
+    for (const e of adj.get(id) || []) {
       const next = Math.max(rank.get(e.to) || 0, r + 1)
       if (!rank.has(e.to) || next > rank.get(e.to)) {
         rank.set(e.to, next)
@@ -150,7 +208,9 @@ export function mermaidFlowSvg(src) {
       return `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="#666" marker-end="url(#arr)"/>${mid}`
     })
     .join('')
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}"><defs><marker id="arr" markerWidth="8" markerHeight="8" refX="8" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#666"/></marker></defs>${edgeSvg}${nodeSvg}</svg>`
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}"><defs><marker id="arr" markerWidth="8" markerHeight="8" refX="8" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#666"/></marker></defs>${edgeSvg}${nodeSvg}</svg>`
+  cacheSet(svgCache, cacheKey, svg)
+  return svg
 }
 
 function escapeXml(s) {

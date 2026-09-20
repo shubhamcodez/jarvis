@@ -142,10 +142,9 @@ def load_eval_runs(limit: int = 2000) -> list[dict]:
         return []
     runs = []
     try:
-        data = path.read_text(encoding="utf-8")
-        raw = [ln.strip() for ln in data.splitlines() if ln.strip()]
-        if limit and len(raw) > limit:
-            raw = raw[-limit:]
+        from observability.config import _tail_lines
+
+        raw = [ln.strip() for ln in _tail_lines(path, max(1, int(limit or 2000))) if ln.strip()]
         for line in raw:
             try:
                 runs.append(json.loads(line))

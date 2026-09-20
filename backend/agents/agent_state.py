@@ -12,6 +12,8 @@ from typing import Any, Optional
 from config import chats_dir
 
 _STATE_LOCK = threading.Lock()
+_STATE_MEM: dict[str, dict[str, Any]] = {}
+_STATE_MEM_MAX = 24
 
 
 def _state_dir() -> Path:
@@ -52,8 +54,15 @@ def empty_state(chat_id: str = "", run_id: Optional[str] = None) -> dict[str, An
 def load_state(chat_id: Optional[str]) -> dict[str, Any]:
     if not chat_id:
         return empty_state()
+    with _STATE_LOCK:
+        cached = _STATE_MEM.get(chat_id)
+        if cached is not None:
+            return cached
     path = _path_for(chat_id)
     with _STATE_LOCK:
+        cached = _STATE_MEM.get(chat_id)
+        if cached is not None:
+            return cached
         if not path.exists():
             return empty_state(chat_id)
         try:
@@ -61,6 +70,9 @@ def load_state(chat_id: Optional[str]) -> dict[str, Any]:
             if isinstance(data, dict):
                 base = empty_state(chat_id)
                 base.update(data)
+                _STATE_MEM[chat_id] = base
+                if len(_STATE_MEM) > _STATE_MEM_MAX:
+                    _STATE_MEM.pop(next(iter(_STATE_MEM)))
                 return base
         except (OSError, json.JSONDecodeError):
             pass
@@ -74,10 +86,13 @@ def save_state(state: dict[str, Any]) -> None:
     state["updated_at"] = time.time()
     path = _path_for(chat_id)
     tmp = path.with_suffix(".tmp")
-    payload = json.dumps(state, ensure_ascii=False, indent=2)
+    payload = json.dumps(state, ensure_ascii=False, separators=(",", ":"))
     with _STATE_LOCK:
         tmp.write_text(payload, encoding="utf-8")
         tmp.replace(path)
+        _STATE_MEM[chat_id] = state
+        if len(_STATE_MEM) > _STATE_MEM_MAX:
+            _STATE_MEM.pop(next(iter(_STATE_MEM)))
 
 
 def begin_run(

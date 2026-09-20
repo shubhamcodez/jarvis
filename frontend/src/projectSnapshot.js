@@ -195,18 +195,25 @@ async function assembleMarkdown(rootLabel, rootOnDiskLine, prefix, records) {
     .map((d) => `${prefix}${d}`)
 
   const fileMetaFull = []
-  for (const { rel, file } of sorted) {
-    const base = rel.split('/').pop() || ''
-    if (base.startsWith('.')) continue
-    const posix = rel
-    const peek = file.size === 0 ? '[empty]' : await filePeekLine(file)
-    const sizeNote = `${file.size} bytes`
-    fileMetaFull.push({
-      sort: posix.toLowerCase(),
-      line: `${prefix}${posix} | ${sizeNote} | ${peek}`,
-      rel: posix,
-      file,
-    })
+  const peekChunk = 32
+  for (let i = 0; i < sorted.length; i += peekChunk) {
+    const slice = sorted.slice(i, i + peekChunk)
+    const rows = await Promise.all(
+      slice.map(async ({ rel, file }) => {
+        const base = rel.split('/').pop() || ''
+        if (base.startsWith('.')) return null
+        const peek = file.size === 0 ? '[empty]' : await filePeekLine(file)
+        return {
+          sort: rel.toLowerCase(),
+          line: `${prefix}${rel} | ${file.size} bytes | ${peek}`,
+          rel,
+          file,
+        }
+      }),
+    )
+    for (const row of rows) {
+      if (row) fileMetaFull.push(row)
+    }
   }
   fileMetaFull.sort((a, b) => a.sort.localeCompare(b.sort))
 
@@ -425,23 +432,45 @@ export async function readProjectFileAsDataUrl(dirHandle, relPath, maxBytes = IM
  * Resolve a child name when filesystem casing may differ (e.g. Windows / picked folder).
  * @param {'file'|'directory'} kind
  */
+const _childHandleCache = new WeakMap()
+
 async function getChildHandleCaseInsensitive(dirHandle, segment, kind) {
   const want = segment.toLowerCase()
+  const cacheKey = `${kind}:${want}`
+  let map = _childHandleCache.get(dirHandle)
+  if (!map) {
+    map = new Map()
+    _childHandleCache.set(dirHandle, map)
+  }
+  if (map.has(cacheKey)) return map.get(cacheKey)
   try {
     if (kind === 'file') {
       const fh = await dirHandle.getFileHandle(segment)
-      return { type: 'file', handle: fh }
+      const hit = { type: 'file', handle: fh }
+      map.set(cacheKey, hit)
+      return hit
     }
     const dh = await dirHandle.getDirectoryHandle(segment)
-    return { type: 'dir', handle: dh }
+    const hit = { type: 'dir', handle: dh }
+    map.set(cacheKey, hit)
+    return hit
   } catch {
     /* fall through */
   }
   for await (const [name, handle] of dirHandle.entries()) {
     if (name.toLowerCase() !== want) continue
-    if (kind === 'file' && handle.kind === 'file') return { type: 'file', handle }
-    if (kind === 'directory' && handle.kind === 'directory') return { type: 'dir', handle }
+    if (kind === 'file' && handle.kind === 'file') {
+      const hit = { type: 'file', handle }
+      map.set(cacheKey, hit)
+      return hit
+    }
+    if (kind === 'directory' && handle.kind === 'directory') {
+      const hit = { type: 'dir', handle }
+      map.set(cacheKey, hit)
+      return hit
+    }
   }
+  map.set(cacheKey, null)
   return null
 }
 
@@ -481,31 +510,37 @@ export async function writeProjectFileText(dirHandle, relPath, text) {
   if (!dirHandle || !relPath) return { ok: false, error: 'Missing folder access or path.' }
   const utf8 = typeof text === 'string' ? text : String(text ?? '')
   const parts = relPath.replace(/\\/g, '/').split('/').filter(Boolean)
-  if (!parts.length) return { ok: false, error: 'Invalid path.' }
+  if (!parts.length || parts.some((p) => p === '.' || p === '..')) {
+    return { ok: false, error: 'Invalid path.' }
+  }
   let cur = dirHandle
   for (let i = 0; i < parts.length; i++) {
     const seg = parts[i]
     const last = i === parts.length - 1
-    const kind = last ? 'file' : 'directory'
-    const resolved = await getChildHandleCaseInsensitive(cur, seg, kind)
-    if (!resolved) return { ok: false, error: 'Could not find that path on disk.' }
-    if (last) {
-      let w
-      try {
-        w = await resolved.handle.createWritable()
-        await w.write(utf8)
-        await w.close()
-      } catch (e) {
+    try {
+      if (last) {
+        const existing = await getChildHandleCaseInsensitive(cur, seg, 'file')
+        const fh = existing?.handle || (await cur.getFileHandle(seg, { create: true }))
+        let w
         try {
-          if (w) await w.abort()
-        } catch {
-          /* ignore */
+          w = await fh.createWritable()
+          await w.write(utf8)
+          await w.close()
+        } catch (e) {
+          try {
+            if (w) await w.abort()
+          } catch {
+            /* ignore */
+          }
+          return { ok: false, error: e?.message || String(e) }
         }
-        return { ok: false, error: e?.message || String(e) }
+        return { ok: true }
       }
-      return { ok: true }
+      const existingDir = await getChildHandleCaseInsensitive(cur, seg, 'directory')
+      cur = existingDir?.handle || (await cur.getDirectoryHandle(seg, { create: true }))
+    } catch (e) {
+      return { ok: false, error: e?.message || 'Could not write that path on disk.' }
     }
-    cur = resolved.handle
   }
   return { ok: false, error: 'Internal error.' }
 }

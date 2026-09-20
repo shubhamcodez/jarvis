@@ -24,6 +24,56 @@ export function getActiveFileMention(text, cursorPos) {
   return { start: at, query: afterAt }
 }
 
+const uniqSortedWeak = new WeakMap()
+const uniqSortedFp = new Map()
+const UNIQ_FP_CAP = 16
+const SCAN_CAP = 4000
+
+const baseSort = (a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' })
+
+function pathsFingerprint(paths) {
+  const n = paths.length
+  return `${n}:${paths[0] || ''}:${paths[n - 1] || ''}`
+}
+
+function normalizePaths(paths) {
+  const arr = Array.isArray(paths) ? paths : []
+  const list = []
+  for (const p of arr) {
+    if (!p) continue
+    list.push(String(p).replace(/\\/g, '/'))
+  }
+  return list
+}
+
+function uniquedPaths(list) {
+  if (list.length < 200) return [...new Set(list)]
+  return list
+}
+
+function getUniqSorted(paths) {
+  const arr = Array.isArray(paths) ? paths : []
+  if (typeof arr === 'object') {
+    const hit = uniqSortedWeak.get(arr)
+    if (hit) return hit
+  }
+  const fp = pathsFingerprint(arr)
+  const fpHit = uniqSortedFp.get(fp)
+  if (fpHit) {
+    if (typeof arr === 'object') uniqSortedWeak.set(arr, fpHit)
+    return fpHit
+  }
+  const uniq = uniquedPaths(normalizePaths(arr))
+  const sorted = [...uniq].sort(baseSort)
+  const packed = { uniq, sorted }
+  if (typeof arr === 'object') uniqSortedWeak.set(arr, packed)
+  uniqSortedFp.set(fp, packed)
+  while (uniqSortedFp.size > UNIQ_FP_CAP) {
+    uniqSortedFp.delete(uniqSortedFp.keys().next().value)
+  }
+  return packed
+}
+
 /**
  * Rank paths for @ autocomplete: basename match, path match, segment matches; shallow paths tie-break.
  * @param {string[]} paths
@@ -33,10 +83,20 @@ export function getActiveFileMention(text, cursorPos) {
  */
 export function rankProjectPathMatches(paths, query, limit = 14) {
   const needle = (query ?? '').trim().toLowerCase()
-  const uniq = [...new Set(paths.filter(Boolean))]
-  const baseSort = (a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' })
+  const packed = getUniqSorted(paths)
   if (!needle) {
-    return [...uniq].sort(baseSort).slice(0, limit)
+    return packed.sorted.slice(0, limit)
+  }
+  let uniq = packed.uniq
+  if (uniq.length > SCAN_CAP) {
+    const pre = []
+    for (const rel of uniq) {
+      const relL = rel.toLowerCase()
+      const slash = relL.lastIndexOf('/')
+      const base = slash === -1 ? relL : relL.slice(slash + 1)
+      if (base.includes(needle) || relL.includes(needle)) pre.push(rel)
+    }
+    uniq = pre.length > SCAN_CAP ? pre.slice(0, SCAN_CAP) : pre
   }
   const scored = []
   for (const rel of uniq) {

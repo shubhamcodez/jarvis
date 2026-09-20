@@ -23,6 +23,21 @@ _LOCK = threading.Lock()
 
 # In-memory current chat path (per process)
 _current_path: Optional[Path] = None
+_CHATS_ROOT: Optional[Path] = None
+_CHAT_DATA_CACHE: dict[str, tuple[int, dict]] = {}
+_LIST_CACHE: Optional[tuple[int, int, list]] = None
+
+
+def _chats_root() -> Path:
+    global _CHATS_ROOT
+    if _CHATS_ROOT is None:
+        _CHATS_ROOT = chats_dir().resolve()
+    return _CHATS_ROOT
+
+
+def _invalidate_list_cache() -> None:
+    global _LIST_CACHE
+    _LIST_CACHE = None
 
 
 class InvalidChatId(ValueError):
@@ -43,7 +58,7 @@ def _safe_chat_id(chat_id: str) -> str:
 
 def _chat_path(chat_id: str) -> Path:
     cid = _safe_chat_id(chat_id)
-    root = chats_dir().resolve()
+    root = _chats_root()
     path = (root / f"{cid}.{CHAT_EXT}").resolve()
     try:
         path.relative_to(root)
@@ -70,6 +85,14 @@ def _load(path: Path) -> dict:
     if not path.exists():
         return {"id": path.stem, "title": "", "messages": [], "agent_session_ids": []}
     try:
+        mt = path.stat().st_mtime_ns
+    except OSError:
+        mt = None
+    key = str(path)
+    hit = _CHAT_DATA_CACHE.get(key)
+    if hit and mt is not None and hit[0] == mt:
+        return hit[1]
+    try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return {"id": path.stem, "title": "", "messages": [], "agent_session_ids": []}
@@ -82,6 +105,10 @@ def _load(path: Path) -> dict:
         data["messages"] = []
     if not data.get("title") and data.get("messages"):
         data["title"] = _title_from_messages(data["messages"])
+    if mt is not None:
+        _CHAT_DATA_CACHE[key] = (mt, data)
+        if len(_CHAT_DATA_CACHE) > 80:
+            _CHAT_DATA_CACHE.pop(next(iter(_CHAT_DATA_CACHE)))
     return data
 
 
@@ -90,6 +117,11 @@ def _save(path: Path, data: dict) -> None:
     tmp = path.with_suffix(".tmp")
     tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
     tmp.replace(path)
+    try:
+        _CHAT_DATA_CACHE[str(path)] = (path.stat().st_mtime_ns, data)
+    except OSError:
+        _CHAT_DATA_CACHE.pop(str(path), None)
+    _invalidate_list_cache()
 
 
 def append_chat_log(role: str, content: str, chat_id: Optional[str] = None) -> None:
@@ -116,33 +148,61 @@ def append_chat_log(role: str, content: str, chat_id: Optional[str] = None) -> N
 
 
 def list_chats() -> list[dict]:
+    global _LIST_CACHE
+    t0 = time.perf_counter()
     root = chats_dir()
     if not root.is_dir():
         return []
     entries = []
+    cached = False
     with _LOCK:
         paths = [p for p in root.glob(f"*.{CHAT_EXT}")]
+        stamp_n = len(paths)
+        stamp_m = 0
         for p in paths:
-            if p.stem.lower() in RESERVED_CHAT_STEMS or not is_valid_chat_id(p.stem):
-                continue
             try:
-                data = _load(p)
-                if not isinstance(data.get("messages"), list):
-                    continue
-                title = data.get("title") or _title_from_messages(data.get("messages", []))
-                entries.append(
-                    {
-                        "id": p.stem,
-                        "title": title or "New chat",
-                        "parent_id": data.get("parent_id") or "",
-                        "branch_label": data.get("branch_label") or "",
-                        "fork_from_index": data.get("fork_from_index"),
-                    }
-                )
-            except Exception:
+                stamp_m = max(stamp_m, p.stat().st_mtime_ns)
+            except OSError:
                 continue
-    entries.sort(key=lambda e: e["id"], reverse=True)
-    return entries
+        if _LIST_CACHE and _LIST_CACHE[0] == stamp_n and _LIST_CACHE[1] == stamp_m:
+            cached = True
+            entries = list(_LIST_CACHE[2])
+        else:
+            for p in paths:
+                if p.stem.lower() in RESERVED_CHAT_STEMS or not is_valid_chat_id(p.stem):
+                    continue
+                try:
+                    data = _load(p)
+                    if not isinstance(data.get("messages"), list):
+                        continue
+                    title = data.get("title") or _title_from_messages(data.get("messages", []))
+                    entries.append(
+                        {
+                            "id": p.stem,
+                            "title": title or "New chat",
+                            "parent_id": data.get("parent_id") or "",
+                            "branch_label": data.get("branch_label") or "",
+                            "fork_from_index": data.get("fork_from_index"),
+                        }
+                    )
+                except Exception:
+                    continue
+            entries.sort(key=lambda e: e["id"], reverse=True)
+            _LIST_CACHE = (stamp_n, stamp_m, entries)
+    # #region agent log
+    try:
+        from _perf_log import perf_log
+
+        perf_log(
+            "chat_log.py:list_chats",
+            "list_chats",
+            {"n": len(entries), "cache": cached, "ms": round((time.perf_counter() - t0) * 1000, 2)},
+            "A",
+        )
+    except Exception:
+        pass
+    # #endregion
+    return list(entries)
 
 
 def set_current_chat(chat_id: str) -> None:
@@ -190,6 +250,8 @@ def delete_chat(chat_id: str) -> bool:
             path.unlink()
         except OSError:
             return False
+        _CHAT_DATA_CACHE.pop(str(path), None)
+        _invalidate_list_cache()
         if _current_path is not None:
             try:
                 if _current_path.resolve() == path.resolve():
@@ -433,12 +495,7 @@ def rewind_chat(chat_id: str, keep_count: Optional[int] = None) -> dict:
             keep = max(0, min(int(keep_count), len(msgs)))
             msgs = msgs[:keep]
         else:
-            if msgs[-1].get("role") == "assistant":
-                msgs = msgs[:-1]
-            elif len(msgs) >= 2 and msgs[-1].get("role") == "user" and msgs[-2].get("role") == "assistant":
-                msgs = msgs[:-2]
-            else:
-                msgs = msgs[:-1]
+            msgs = msgs[:-1]
         data["messages"] = msgs
         _save(path, data)
         return {"ok": True, "kept": len(msgs), "dropped": before - len(msgs)}

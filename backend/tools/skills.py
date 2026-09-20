@@ -2,10 +2,14 @@
 from __future__ import annotations
 
 import re
+import time
 from pathlib import Path
 from typing import Any, Optional
 
 from config import get_workspace_root
+
+_SKILL_CACHE: dict[str, tuple[float, list[dict[str, Any]]]] = {}
+_SKILL_TTL = 8.0
 
 SKILL_DIRS = (
     ".agents/skills",
@@ -37,6 +41,10 @@ def discover_skills(workspace_root: Optional[str] = None, max_skills: int = 40) 
     raw = (workspace_root or get_workspace_root() or "").strip()
     if not raw:
         return []
+    now = time.monotonic()
+    hit = _SKILL_CACHE.get(raw)
+    if hit and now - hit[0] < _SKILL_TTL:
+        return hit[1]
     root = Path(raw)
     if not root.is_dir():
         return []
@@ -46,7 +54,7 @@ def discover_skills(workspace_root: Optional[str] = None, max_skills: int = 40) 
         base = root / rel
         if not base.is_dir():
             continue
-        for path in sorted(base.rglob("SKILL.md")):
+        for path in base.rglob("SKILL.md"):
             try:
                 text = path.read_text(encoding="utf-8", errors="replace")
             except OSError:
@@ -66,7 +74,9 @@ def discover_skills(workspace_root: Optional[str] = None, max_skills: int = 40) 
                 }
             )
             if len(found) >= max_skills:
+                _SKILL_CACHE[raw] = (now, found)
                 return found
+    _SKILL_CACHE[raw] = (now, found)
     return found
 
 

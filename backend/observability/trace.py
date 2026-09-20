@@ -123,13 +123,15 @@ def _rotate_if_needed(path: Path) -> None:
         # Cheap line-count via size heuristic + occasional full rotate.
         if path.stat().st_size < 8_000_000:
             return
-        lines = path.read_text(encoding="utf-8").splitlines()
-        if len(lines) <= _MAX_LINE:
-            return
-        keep = lines[-(_MAX_LINE // 2) :]
-        tmp = path.with_suffix(".jsonl.tmp")
-        tmp.write_text("\n".join(keep) + "\n", encoding="utf-8")
-        tmp.replace(path)
+        rotated = path.with_suffix(".jsonl.1")
+        try:
+            rotated.unlink(missing_ok=True)
+        except TypeError:
+            if rotated.exists():
+                rotated.unlink()
+        except OSError:
+            pass
+        path.replace(rotated)
     except OSError:
         pass
 

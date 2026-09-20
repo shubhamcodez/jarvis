@@ -280,6 +280,27 @@ class BrandEnvAliasTests(unittest.TestCase):
         self.assertTrue(str(chats_config_path()).replace("\\", "/").endswith("jarvis-chats-dir.txt"))
 
 
+class WorkspaceWriteTests(unittest.TestCase):
+    def test_creates_missing_parent_dirs(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            with patch("tools.workspace_io.get_workspace_root", return_value=str(root)):
+                from tools.workspace_io import write_file_raw
+
+                r = write_file_raw("pkg/new/hello.py", "print(1)\n")
+                self.assertTrue(r.get("ok"), r)
+                self.assertEqual((root / "pkg" / "new" / "hello.py").read_text(encoding="utf-8"), "print(1)\n")
+
+    def test_rejects_parent_escape(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            with patch("tools.workspace_io.get_workspace_root", return_value=str(root)):
+                from tools.workspace_io import write_file_raw
+
+                r = write_file_raw("../outside.py", "x")
+                self.assertFalse(r.get("ok"))
+
+
 class WorkspaceRunTests(unittest.TestCase):
     def test_command_for_python(self):
         from tools.workspace_run import command_for_path

@@ -33,7 +33,7 @@ def _effective_max_results(requested: int) -> int:
     import os
 
     try:
-        raw = (os.environ.get("ADA_WEB_SEARCH_MAX_RESULTS") or os.environ.get("JARVIS_WEB_SEARCH_MAX_RESULTS") or "").strip()
+        raw = (os.environ.get("JARVIS_WEB_SEARCH_MAX_RESULTS") or os.environ.get("ADA_WEB_SEARCH_MAX_RESULTS") or "").strip()
         env_n = int(raw or str(_DEFAULT_RESULTS))
     except ValueError:
         env_n = _DEFAULT_RESULTS

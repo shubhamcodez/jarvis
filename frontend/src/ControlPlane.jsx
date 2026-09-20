@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { memo, useEffect, useMemo, useRef, useState } from 'react'
 
 const ICON_AGENT = (
   <svg className="mode-menu__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden>
@@ -100,7 +100,9 @@ export function ModeMenu({ runMode, onRunMode }) {
   )
 }
 
-export function ControlPlane({
+const OPEN_TASK_STATUSES = ['pending', 'active', 'blocked', 'waiting_approval', 'paused', 'error']
+
+export const ControlPlane = memo(function ControlPlane({
   runMode,
   onRunMode,
   liveUsage,
@@ -115,10 +117,11 @@ export function ControlPlane({
   const used = liveUsage?.tokens_used || 0
   const cap = liveUsage?.max_tokens ?? 80000
   const pct = cap ? Math.min(100, Math.round((used / cap) * 100)) : 0
-  const openTasks = (tasks || []).filter((t) =>
-    ['pending', 'active', 'blocked', 'waiting_approval', 'paused', 'error'].includes(t.status),
+  const openTasks = useMemo(
+    () => (tasks || []).filter((t) => OPEN_TASK_STATUSES.includes(t.status)),
+    [tasks],
   )
-  const liveRuns = runs || []
+  const liveRuns = useMemo(() => runs || [], [runs])
   const showStrip = used > 0 || liveRuns.length > 0 || openTasks.length > 0
 
   if (!showStrip) return null
@@ -189,4 +192,4 @@ export function ControlPlane({
       ) : null}
     </div>
   )
-}
+})

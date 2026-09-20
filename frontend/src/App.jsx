@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback, useMemo, forwardRef, useImperativeHandle } from 'react'
+import { useState, useEffect, useRef, useCallback, useMemo, memo, forwardRef, useImperativeHandle } from 'react'
 import CodeMirror from '@uiw/react-codemirror'
 import { Prec } from '@codemirror/state'
 import { keymap } from '@codemirror/view'
@@ -141,6 +141,9 @@ import ReactMarkdown, { defaultUrlTransform } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import './App.css'
 
+const REMARK_PLUGINS = [remarkGfm]
+let lastWorkspacePathsJson = ''
+
 const CODING_LAYOUT_STORAGE_KEY = 'jarvis-coding-layout-widths'
 
 const EXPLORER_PANEL = { min: 200, max: 560, default: 280 }
@@ -241,7 +244,7 @@ function truncateToolPreview(text, maxChars = TOOL_PREVIEW_MAX_CHARS) {
   return `${(sp > 56 ? cut.slice(0, sp) : cut).trimEnd()}…`
 }
 
-function ToolMessageCard({ content }) {
+const ToolMessageCard = memo(function ToolMessageCard({ content }) {
   const [expanded, setExpanded] = useState(false)
   try {
     const t = typeof content === 'string' ? JSON.parse(content) : content
@@ -292,7 +295,7 @@ function ToolMessageCard({ content }) {
   } catch {
     return <span className="msg-text">{content}</span>
   }
-}
+})
 
 /** Copy assistant text without embedding multi‑MB base64 images. */
 function stripChartDataUrlsForCopy(md) {
@@ -359,11 +362,12 @@ const REPO_FOLDER_ICON = (
   </svg>
 )
 
-function CopyResponseButton({ text }) {
+const CopyResponseButton = memo(function CopyResponseButton({ text }) {
   const [copied, setCopied] = useState(false)
   const plain = typeof text === 'string' ? text : String(text ?? '')
+  const stripped = useMemo(() => stripChartDataUrlsForCopy(plain), [plain])
   const handleCopy = async () => {
-    const toCopy = stripChartDataUrlsForCopy(plain)
+    const toCopy = stripped
     if (!toCopy.trim()) return
     try {
       await navigator.clipboard.writeText(toCopy)
@@ -393,7 +397,7 @@ function CopyResponseButton({ text }) {
         type="button"
         className={`msg-copy-btn${copied ? ' msg-copy-btn--done' : ''}`}
         onClick={handleCopy}
-        disabled={!stripChartDataUrlsForCopy(plain).trim()}
+        disabled={!stripped.trim()}
         aria-label={copied ? 'Copied to clipboard' : 'Copy response to clipboard'}
       >
         {COPY_ICON}
@@ -401,7 +405,7 @@ function CopyResponseButton({ text }) {
       </button>
     </div>
   )
-}
+})
 
 const RUNNABLE_RUNTIME = {
   '.py': 'Python',
@@ -1095,11 +1099,14 @@ function App() {
   const [codingLayoutWidths, setCodingLayoutWidths] = useState(() => readCodingLayoutWidths())
 
   useEffect(() => {
-    try {
-      localStorage.setItem(CODING_LAYOUT_STORAGE_KEY, JSON.stringify(codingLayoutWidths))
-    } catch {
-      /* ignore */
-    }
+    const t = window.setTimeout(() => {
+      try {
+        localStorage.setItem(CODING_LAYOUT_STORAGE_KEY, JSON.stringify(codingLayoutWidths))
+      } catch {
+        /* ignore */
+      }
+    }, 400)
+    return () => window.clearTimeout(t)
   }, [codingLayoutWidths])
 
   const onExplorerPanelResizePointerDown = useCallback(
@@ -1588,22 +1595,24 @@ function App() {
   }, [])
 
   const refreshControlPlane = useCallback(async () => {
-    try {
-      const data = await listTasks(null, true)
-      setControlTasks(Array.isArray(data?.tasks) ? data.tasks : [])
-    } catch {
+    const [tasksRes, runsRes, cpsRes] = await Promise.allSettled([
+      listTasks(null, true),
+      listActiveRuns(),
+      listCheckpoints(),
+    ])
+    if (tasksRes.status === 'fulfilled') {
+      setControlTasks(Array.isArray(tasksRes.value?.tasks) ? tasksRes.value.tasks : [])
+    } else {
       setControlTasks([])
     }
-    try {
-      const data = await listActiveRuns()
-      setActiveRuns(Array.isArray(data?.runs) ? data.runs : [])
-    } catch {
+    if (runsRes.status === 'fulfilled') {
+      setActiveRuns(Array.isArray(runsRes.value?.runs) ? runsRes.value.runs : [])
+    } else {
       setActiveRuns([])
     }
-    try {
-      const data = await listCheckpoints()
-      setCheckpoints(Array.isArray(data?.checkpoints) ? data.checkpoints : [])
-    } catch {
+    if (cpsRes.status === 'fulfilled') {
+      setCheckpoints(Array.isArray(cpsRes.value?.checkpoints) ? cpsRes.value.checkpoints : [])
+    } else {
       setCheckpoints([])
     }
   }, [])
@@ -1809,8 +1818,9 @@ function App() {
   useEffect(() => {
     if (!sending) return undefined
     const t = setInterval(() => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return
       refreshControlPlane()
-    }, 2500)
+    }, 5000)
     return () => clearInterval(t)
   }, [sending, refreshControlPlane])
 
@@ -1833,7 +1843,7 @@ function App() {
       } catch {
         /* ignore */
       }
-    }, 1000)
+    }, 2000)
     return () => clearInterval(t)
   }, [panel, localJob?.status, refreshLocalModels, refreshModelSetting])
 
@@ -1842,11 +1852,12 @@ function App() {
     refreshBookmarks()
     refreshUsage()
     const t = setInterval(() => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return
       refreshPendingApprovals()
       refreshUsage()
-    }, 8000)
+    }, sending ? 8000 : 30000)
     return () => clearInterval(t)
-  }, [refreshPendingApprovals, refreshBookmarks, refreshUsage])
+  }, [sending, refreshPendingApprovals, refreshBookmarks, refreshUsage])
 
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', colorScheme)
@@ -2246,8 +2257,8 @@ function App() {
   }, [refreshGoogleAuth])
 
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [messages, streamTimeline])
+    messagesEndRef.current?.scrollIntoView({ behavior: 'auto' })
+  }, [messages.length, streamTimeline.length])
 
   useEffect(() => {
     if (!addMenuOpen) return
@@ -2440,7 +2451,11 @@ function App() {
       return list
     })
     try {
-      sessionStorage.setItem('jarvis-workspace-paths', JSON.stringify(list))
+      const raw = JSON.stringify(list)
+      if (raw !== lastWorkspacePathsJson) {
+        lastWorkspacePathsJson = raw
+        sessionStorage.setItem('jarvis-workspace-paths', raw)
+      }
     } catch {
       /* ignore */
     }
@@ -2471,6 +2486,10 @@ function App() {
 
     const tick = async () => {
       if (cancelled || workspaceClearedRef.current) return
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return
+      // #region agent log
+      fetch('http://127.0.0.1:7379/ingest/d4a6c664-f167-437c-bb75-f8687c530271',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'1e8c6b'},body:JSON.stringify({sessionId:'1e8c6b',location:'App.jsx:workspaceTick',message:'workspace poll',data:{hidden:false},timestamp:Date.now(),hypothesisId:'C'})}).catch(()=>{})
+      // #endregion
       try {
         const st = await workspaceTreeStamp()
         if (!cancelled && st?.ok && st.stamp && st.stamp !== workspaceTreeStampRef.current) {
@@ -2493,7 +2512,7 @@ function App() {
     }
 
     tick()
-    const id = window.setInterval(tick, 2000)
+    const id = window.setInterval(tick, 5000)
     return () => {
       cancelled = true
       window.clearInterval(id)
@@ -2954,7 +2973,7 @@ function App() {
             } catch {
               /* ignore */
             }
-          }, 12000)
+          }, 20000)
         }
         if ((data?.kind === 'export' || data?.kind === 'copy') && data.text) {
           try {
@@ -3415,7 +3434,10 @@ function App() {
     }
   }
 
-  const displayMessages = messages.length > 200 ? messages.slice(-200) : messages
+  const displayMessages = useMemo(
+    () => (messages.length > 200 ? messages.slice(-200) : messages),
+    [messages],
+  )
   const displayOffset = messages.length > 200 ? messages.length - 200 : 0
 
   const chatMainInner = (
@@ -3521,7 +3543,7 @@ function App() {
               <div className="msg-bot-body">
                 <div className="msg-markdown">
                   <ReactMarkdown
-                    remarkPlugins={[remarkGfm]}
+                    remarkPlugins={REMARK_PLUGINS}
                     urlTransform={markdownUrlTransform}
                     components={workspaceEditMarkdownComponents}
                   >
@@ -3656,7 +3678,7 @@ function App() {
               <div className="msg-bot-body msg-stream-reply-body">
                 <div className="msg-markdown stream-reply-md">
                   <ReactMarkdown
-                    remarkPlugins={[remarkGfm]}
+                    remarkPlugins={REMARK_PLUGINS}
                     urlTransform={markdownUrlTransform}
                     components={workspaceEditMarkdownComponents}
                   >
