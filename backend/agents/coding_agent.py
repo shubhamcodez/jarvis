@@ -24,6 +24,7 @@ Output ONLY a JSON object, no markdown fences, with exactly one key:
 Rules for the code:
 - Allowed imports (stdlib + sandbox): math, json, itertools, functools, collections, statistics, datetime, decimal, fractions, string, random, re, operator, copy, io, base64, csv, hashlib, typing, warnings, plus **numpy**, **pandas**, **matplotlib**, **yfinance** and their usual dependencies (already whitelisted).
 - **Matplotlib:** call `import matplotlib; matplotlib.use("Agg")` before `pyplot`. To show a chart in the chat UI, save PNG to bytes and print **exactly one line**: `ADA_IMAGE_PNG:` + base64 (no newlines inside), e.g. `print("ADA_IMAGE_PNG:" + base64.b64encode(buf.getvalue()).decode())`. You may print other text before/after on separate lines; those appear as monospace. Raw single-line PNG base64 (starts with `iVBOR`) is also detected.
+- **HTML/SVG/Mermaid preview:** print `ADA_PREVIEW_HTML:<markup>`, `ADA_PREVIEW_SVG:<markup>`, or `ADA_PREVIEW_MERMAID:graph TD; A --> B` on one line (or a ```html / ```svg / ```mermaid fence). The UI shows a sandboxed live preview.
 - **yfinance:** OK for pulling `Ticker(...).history(...)` or `fast_info` inside your analysis script when the task needs live series.
 - No `open()`, no `os`/`sys`/`subprocess`, no `input()`. Print answers with `print()`.
 - Keep code focused; prefer small readable steps.
@@ -266,30 +267,32 @@ def _swe_workspace_root(explicit: Optional[str] = None) -> str:
 
 
 def _use_swe_loop(goal: str, workspace_root: str, project_context: str) -> bool:
+    """Linked folder + edit/work intent → SWE. Plots/Q&A stay on the sandbox/chat path."""
     if not workspace_root:
+        return False
+    g = (goal or "").lower().strip()
+    if not g:
+        return False
+    sandbox_first = (
+        "plot ",
+        "chart",
+        "histogram",
+        "yfinance",
+        "matplotlib",
+        "dataframe",
+        "numpy ",
+        "simulate",
+        "run a backtest",
+        "correlation",
+    )
+    if any(s in g for s in sandbox_first) and not _likely_repo_edit_without_sandbox(goal):
         return False
     if _likely_repo_edit_without_sandbox(goal):
         return True
-    g = (goal or "").lower()
-    swe_signals = (
-        "failing test",
-        "unit test",
-        "regression",
-        "github issue",
-        "stack trace",
-        "traceback",
-        "typeerror",
-        "attributeerror",
-        "pull request",
-        "repo",
-        "codebase",
-        "workspace",
-    )
-    if any(s in g for s in swe_signals):
-        return True
-    if len(project_context) > 100 and any(s in g for s in ("fix", "implement", "refactor", "add ", "edit ")):
-        return True
-    return False
+    qa = g.startswith(("what is ", "what are ", "explain ", "describe ", "summarize ", "overview ", "why "))
+    if qa and not any(x in g for x in ("fix", "bug", "change", "update", "implement", "refactor", "add ", "remove ", "edit ")):
+        return False
+    return True
 
 
 def run_coding_agent(
@@ -301,6 +304,7 @@ def run_coding_agent(
     project_context: Optional[str] = None,
     workspace_root: Optional[str] = None,
     apply_writes: bool = False,
+    run_id: Optional[str] = None,
 ) -> tuple[str, dict]:
     """
     Repo tasks: localize → patch → test → critic (overlay worktree).
@@ -311,6 +315,16 @@ def run_coding_agent(
         from config import get_llm_api_key
 
         api_key = get_llm_api_key()
+
+    if run_id:
+        try:
+            from agents.run_control import stop_reason
+
+            halt = stop_reason(run_id)
+            if halt:
+                return halt, {}
+        except Exception:
+            pass
 
     goal = (goal or "").strip()
     if not goal:
@@ -332,6 +346,7 @@ def run_coding_agent(
             provider=provider,
             apply_writes=apply_writes,
             project_context=ctx_full,
+            control_run_id=run_id,
         )
 
     if len(ctx_full) > 100 and _likely_repo_edit_without_sandbox(goal):
@@ -443,6 +458,16 @@ def run_coding_agent(
             False,
             screenshot_base64=None,
         )
+
+    if run_id:
+        try:
+            from agents.run_control import stop_reason
+
+            halt = stop_reason(run_id)
+            if halt:
+                return halt, {}
+        except Exception:
+            pass
 
     result = run_sandboxed_python(code, timeout_sec=45.0)
     if not result.get("ok"):

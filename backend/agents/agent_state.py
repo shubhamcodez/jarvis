@@ -2,12 +2,15 @@
 from __future__ import annotations
 
 import json
+import threading
 import time
 import uuid
 from pathlib import Path
 from typing import Any, Optional
 
 from config import chats_dir
+
+_STATE_LOCK = threading.Lock()
 
 
 def _state_dir() -> Path:
@@ -49,16 +52,17 @@ def load_state(chat_id: Optional[str]) -> dict[str, Any]:
     if not chat_id:
         return empty_state()
     path = _path_for(chat_id)
-    if not path.exists():
-        return empty_state(chat_id)
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-        if isinstance(data, dict):
-            base = empty_state(chat_id)
-            base.update(data)
-            return base
-    except (OSError, json.JSONDecodeError):
-        pass
+    with _STATE_LOCK:
+        if not path.exists():
+            return empty_state(chat_id)
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                base = empty_state(chat_id)
+                base.update(data)
+                return base
+        except (OSError, json.JSONDecodeError):
+            pass
     return empty_state(chat_id)
 
 
@@ -69,8 +73,10 @@ def save_state(state: dict[str, Any]) -> None:
     state["updated_at"] = time.time()
     path = _path_for(chat_id)
     tmp = path.with_suffix(".tmp")
-    tmp.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
-    tmp.replace(path)
+    payload = json.dumps(state, ensure_ascii=False, indent=2)
+    with _STATE_LOCK:
+        tmp.write_text(payload, encoding="utf-8")
+        tmp.replace(path)
 
 
 def begin_run(

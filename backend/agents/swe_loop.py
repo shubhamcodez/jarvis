@@ -12,7 +12,7 @@ from typing import Any, Callable, Optional
 
 from agents.models import chat_completion_limit_kwargs, get_llm_client, should_omit_temperature
 from tools.artifact_store import new_run_id, write_artifact
-from tools.diagnostics import run_python_tests, syntax_check_python
+from tools.diagnostics import lsp_check_python, run_python_tests, syntax_check_python
 from tools.localize import localize
 from tools.overlay_workspace import OverlayWorkspace
 from tools.project_rules import load_project_rules
@@ -26,11 +26,12 @@ _TOOL_RESULT_CHARS = 7000
 _SWE_SYSTEM = """You are Ada's software engineering agent. This is a local unit-test coding exercise in a toy repository. You solve repo tasks with tools.
 
 Stable workflow (do not skip):
-1. Localize with list_dir, grep, and read_file until you know the exact files and lines.
+1. Localize with list_dir, grep, read_file, and git_history (log/blame) until you know the exact files and lines.
 2. update_plan with 3–8 concrete steps.
 3. apply_patch with a unique old string. Prefer surgical edits over rewrite.
-4. run_tests after edits. If tests fail, read the failure and patch again.
-5. finish only when tests pass, syntax is clean, or you have a hard blocker.
+4. After each patch, fix LSP / syntax diagnostics before run_tests.
+5. run_tests after edits. If tests fail, read the failure and patch again.
+6. finish only when tests pass, syntax and LSP are clean, or you have a hard blocker.
 
 Output ONLY a JSON object, no markdown:
 {"tool": "<name>", "args": { ... }}
@@ -44,8 +45,8 @@ Reply ONLY JSON:
 {"score": 0.0-1.0, "passed": true|false, "issues": ["..."], "retry_instructions": "what to fix, or empty if passed"}
 
 Rules:
-- passed=true only if tests passed, or there are no tests AND syntax is clean AND the goal is visibly implemented.
-- If tests failed, passed must be false.
+- passed=true only if tests passed, or there are no tests AND syntax/LSP are clean AND the goal is visibly implemented.
+- If tests failed or LSP reports errors, passed must be false.
 - Be specific in retry_instructions (file + what is still wrong).
 """
 
@@ -83,6 +84,12 @@ def _clip(obj: Any, limit: int = _TOOL_RESULT_CHARS) -> str:
         text = json.dumps(obj, ensure_ascii=False, default=str)
     except TypeError:
         text = str(obj)
+    try:
+        from observability.redact import redact_text
+
+        text = redact_text(text, max_len=limit + 200)
+    except Exception:
+        pass
     if len(text) > limit:
         return text[: limit - 20] + "…[truncated]"
     return text
@@ -119,9 +126,11 @@ def critic_evaluate(
     last_tests: Optional[dict[str, Any]],
     syntax: Optional[dict[str, Any]],
     summary: str,
+    lsp: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
     tests_ok = bool((last_tests or {}).get("passed")) if last_tests else None
     syn_ok = bool((syntax or {}).get("ok")) if syntax else None
+    lsp_ok = bool((lsp or {}).get("ok")) if lsp else None
     if last_tests is not None and not tests_ok:
         return {
             "score": 0.2,
@@ -136,9 +145,17 @@ def critic_evaluate(
             "issues": ["syntax errors"],
             "retry_instructions": json.dumps((syntax or {}).get("errors") or [])[:800],
         }
+    if lsp and not lsp_ok:
+        return {
+            "score": 0.25,
+            "passed": False,
+            "issues": ["lsp diagnostics"],
+            "retry_instructions": json.dumps((lsp or {}).get("diagnostics") or [])[:800],
+        }
     payload = (
         f"Goal: {goal}\nChanged files: {changed}\n"
         f"Tests: {_clip(last_tests, 2500)}\nSyntax: {_clip(syntax, 800)}\n"
+        f"LSP: {_clip(lsp, 800)}\n"
         f"Agent summary: {summary[:1500]}"
     )
     raw = _llm_json(
@@ -178,6 +195,7 @@ def run_swe_loop(
     apply_writes: bool = False,
     project_context: str = "",
     max_steps: int = _MAX_STEPS,
+    control_run_id: Optional[str] = None,
 ) -> tuple[str, dict[str, Any]]:
     if api_key is None:
         from config import get_llm_api_key
@@ -192,6 +210,21 @@ def run_swe_loop(
     run_id = new_run_id()
     plan: list[dict[str, Any]] = []
     loc = localize(ws, goal)
+    thin = len(loc.get("files") or []) <= 1
+    if thin and api_key:
+        try:
+            from agents.subagents import run_explore
+
+            if on_step:
+                on_step(0, "Localization was thin; running explore", "explore", "", None, False)
+            exp = run_explore(goal, ws, api_key, provider, run_id=run_id, max_steps=5)
+            extra = [p for p in (exp.get("files") or []) if p not in (loc.get("files") or [])]
+            if extra:
+                loc["files"] = list(loc.get("files") or []) + extra
+            if exp.get("summary"):
+                loc["explore"] = exp["summary"][:1500]
+        except Exception:
+            pass
     write_artifact("localize.json", json.dumps(loc, indent=2), run_id=run_id, kind="localize")
     rules = load_project_rules(workspace_root=str(ws.root))
 
@@ -211,7 +244,10 @@ def run_swe_loop(
         + "\n\nWorkspace files (bounded):\n"
         + ws.tree_summary(160)
         + "\n\nCheap localization (ranked):\n"
-        + json.dumps({"files": loc.get("files"), "needles": loc.get("needles")}, ensure_ascii=False)
+        + json.dumps(
+            {"files": loc.get("files"), "needles": loc.get("needles"), "explore": loc.get("explore")},
+            ensure_ascii=False,
+        )
     )
     if rules:
         system += "\n\n" + rules[:4000]
@@ -250,6 +286,7 @@ def run_swe_loop(
     ]
     last_tests: Optional[dict[str, Any]] = None
     last_syntax: Optional[dict[str, Any]] = None
+    last_lsp: Optional[dict[str, Any]] = None
     last_summary = ""
     critic: Optional[dict[str, Any]] = None
     finished = False
@@ -257,8 +294,21 @@ def run_swe_loop(
     writes = 0
     readonly_streak = 0
     refusals = 0
+    empty_json = 0
+    stall = 0
+    last_fp = ""
+    lsp_blocked = False
 
     for step in range(1, max(2, int(max_steps)) + 1):
+        if control_run_id:
+            try:
+                from agents.run_control import stop_reason
+
+                halt = stop_reason(control_run_id)
+                if halt:
+                    return halt, {"name": "swe", "input": goal[:500], "result": "cancelled"}
+            except Exception:
+                pass
         step_used = step
         try:
             raw = _llm_json(api_key, provider, system, history, max_tokens=1800)
@@ -285,13 +335,24 @@ def run_swe_loop(
             break
         call = _parse_tool_call(raw)
         if not call:
-            history.append({"role": "assistant", "content": raw[:2000]})
+            empty_json += 1
+            if empty_json >= 3:
+                last_summary = "Stopped: empty or invalid JSON"
+                break
+            history.append({"role": "assistant", "content": (raw or "")[:2000]})
             history.append({"role": "user", "content": 'Invalid JSON. Reply with only {"tool":"...","args":{}}'})
             continue
+        empty_json = 0
         tool = call["tool"]
         args = call["args"]
-        result = dispatch(ws, tool, args, run_id=run_id, plan=plan, allow_writes=True)
-        if tool in ("apply_patch", "write_file"):
+        if lsp_blocked and tool not in ("read_file", "apply_patch", "write_file", "run_tests", "update_plan"):
+            result = {
+                "ok": False,
+                "error": "LSP errors remain; use read_file, apply_patch, write_file, or run_tests until clean",
+            }
+        else:
+            result = dispatch(ws, tool, args, run_id=run_id, plan=plan, allow_writes=True)
+        if tool in ("apply_patch", "write_file") and result.get("ok"):
             writes += 1
             readonly_streak = 0
         elif tool in ("list_dir", "grep", "read_file"):
@@ -299,9 +360,23 @@ def run_swe_loop(
         if tool == "run_tests":
             last_tests = (result.get("tests") or result) if isinstance(result, dict) else None
             last_syntax = result.get("syntax") if isinstance(result, dict) else None
+            last_lsp = result.get("lsp") if isinstance(result, dict) else last_lsp
         if tool in ("apply_patch", "write_file") and result.get("ok"):
             last_syntax = syntax_check_python(ws)
-            result = {**result, "syntax": last_syntax}
+            last_lsp = lsp_check_python(ws)
+            result = {**result, "syntax": last_syntax, "lsp": last_lsp}
+        if last_lsp is not None:
+            lsp_blocked = not bool(last_lsp.get("ok"))
+        tsum = ""
+        if isinstance(result, dict):
+            tests = result.get("tests") if isinstance(result.get("tests"), dict) else {}
+            tsum = str((tests or {}).get("summary") or result.get("error") or "")[:80]
+        fp = f"{tool}|{args.get('path') or ''}|{tsum}"
+        if fp == last_fp:
+            stall += 1
+        else:
+            stall = 0
+            last_fp = fp
         if on_step:
             desc = tool
             if tool == "apply_patch":
@@ -313,12 +388,29 @@ def run_swe_loop(
             on_step(step, raw[:400], tool, desc, _clip(result, 800), False)
 
         if tool == "finish":
+            if writes and last_tests is None:
+                history.append({"role": "assistant", "content": raw[:2500]})
+                history.append(
+                    {
+                        "role": "user",
+                        "content": "finish refused: call run_tests after writes, then finish.",
+                    }
+                )
+                continue
             last_summary = str((args or {}).get("summary") or result.get("summary") or "")
             if last_tests is None and ws.changed_paths():
                 last_syntax = syntax_check_python(ws)
+                last_lsp = lsp_check_python(ws)
                 last_tests = run_python_tests(ws)
             critic = critic_evaluate(
-                api_key, provider, goal, ws.changed_paths(), last_tests, last_syntax, last_summary
+                api_key,
+                provider,
+                goal,
+                ws.changed_paths(),
+                last_tests,
+                last_syntax,
+                last_summary,
+                last_lsp,
             )
             if critic.get("passed") or critic.get("score", 0) >= 0.85:
                 finished = True
@@ -349,17 +441,39 @@ def run_swe_loop(
             )
         if tool == "apply_patch" and not result.get("ok"):
             follow += "\nPatch failed. Re-read the file (no line-number prefixes in old) and try a smaller unique old string."
+        if stall >= 2:
+            follow += "\n\nNo progress: you repeated the same tool/path. Try a different file or a smaller unique patch."
         history.append({"role": "user", "content": follow})
+        if stall >= 4:
+            last_summary = "Stopped: no progress"
+            break
         if len(history) > 20:
             compact = "Earlier steps compacted. Plan=" + json.dumps(plan) + " Changed=" + ",".join(ws.changed_paths())
             history = [{"role": "user", "content": compact}, *history[-12:]]
 
     if not finished and last_tests is None and ws.changed_paths():
         last_syntax = syntax_check_python(ws)
+        last_lsp = lsp_check_python(ws)
         last_tests = run_python_tests(ws)
-        critic = critic_evaluate(api_key, provider, goal, ws.changed_paths(), last_tests, last_syntax, last_summary)
+        critic = critic_evaluate(
+            api_key, provider, goal, ws.changed_paths(), last_tests, last_syntax, last_summary, last_lsp
+        )
 
+    checkpoint_id = ""
     if apply_writes and ws.changed_paths():
+        try:
+            from agents.run_control import current_run_id, record_checkpoint
+
+            snap = record_checkpoint(
+                current_run_id(),
+                kind="overlay_turn",
+                summary=f"overlay apply {len(ws.changed_paths())} files",
+                payload=ws.originals_for_changed(),
+            )
+            if snap:
+                checkpoint_id = str(snap.get("id") or "")
+        except Exception:
+            pass
         ws.apply_to_root()
 
     fences = ws.ada_file_fences()
@@ -379,6 +493,7 @@ def run_swe_loop(
         f"Changed files: {', '.join(ws.changed_paths()) or '(none)'}\n"
         f"Steps: {step_used}. Isolation: overlay worktree"
         + (" applied to disk." if apply_writes else " — review diffs before apply.")
+        + (f"\nCheckpoint `{checkpoint_id}` — `/undo` restores this turn." if checkpoint_id else "")
         + tests_line
         + critic_line
         + (f"\n\n{last_summary}" if last_summary else "")

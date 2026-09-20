@@ -189,9 +189,6 @@ def sync_from_agent_state(state: dict[str, Any], *, status: Optional[str] = None
     run_id = (state.get("run_id") or "").strip()
     if not run_id:
         return None
-    task = get_task_by_run(run_id)
-    if not task:
-        return None
     plan = list(state.get("plan") or [])
     next_action = ""
     for step in plan:
@@ -199,20 +196,6 @@ def sync_from_agent_state(state: dict[str, Any], *, status: Optional[str] = None
             next_action = f"{step.get('agent') or 'ada'}: {step.get('goal') or ''}".strip()
             break
     findings = state.get("findings") or []
-    artifact = findings[-1][:400] if findings else task.get("artifact") or ""
-    derived = status
-    if derived is None:
-        statuses = {s.get("status") for s in plan}
-        if state.get("errors") and "error" in statuses:
-            derived = "error"
-        elif any(s.get("status") == "active" for s in plan):
-            derived = "active"
-        elif plan and all(s.get("status") in ("complete", "skipped") for s in plan):
-            derived = "complete"
-        elif any(s.get("status") == "error" for s in plan):
-            derived = "error"
-        else:
-            derived = task.get("status") or "active"
     pending = False
     try:
         from agents.hitl import list_pending
@@ -220,16 +203,40 @@ def sync_from_agent_state(state: dict[str, Any], *, status: Optional[str] = None
         pending = bool(list_pending(state.get("chat_id")))
     except Exception:
         pending = False
-    if pending and derived == "active":
-        derived = "waiting_approval"
-    return update_task(
-        task["id"],
-        status=derived,
-        next_action=next_action[:400],
-        artifact=artifact,
-        plan=plan,
-        error=(state.get("errors") or [""])[-1] if state.get("errors") else "",
-    )
+    with _LOCK:
+        data = _load()
+        task = None
+        for t in data.get("tasks") or []:
+            if t.get("run_id") == run_id:
+                task = t
+                break
+        if not task:
+            return None
+        artifact = findings[-1][:400] if findings else task.get("artifact") or ""
+        derived = status
+        if derived is None:
+            statuses = {s.get("status") for s in plan}
+            if state.get("errors") and "error" in statuses:
+                derived = "error"
+            elif any(s.get("status") == "active" for s in plan):
+                derived = "active"
+            elif plan and all(s.get("status") in ("complete", "skipped") for s in plan):
+                derived = "complete"
+            elif any(s.get("status") == "error" for s in plan):
+                derived = "error"
+            else:
+                derived = task.get("status") or "active"
+        if pending and derived == "active":
+            derived = "waiting_approval"
+        if derived and derived in _STATUSES:
+            task["status"] = derived
+        task["next_action"] = next_action[:400]
+        task["artifact"] = artifact
+        task["plan"] = plan
+        task["error"] = (state.get("errors") or [""])[-1] if state.get("errors") else ""
+        task["updated_at"] = time.time()
+        _save(data)
+        return _public(task)
 
 
 def remaining_plan(task: dict[str, Any]) -> list[dict[str, Any]]:

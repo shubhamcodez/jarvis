@@ -5,6 +5,7 @@ import json
 import threading
 import time
 import uuid
+from contextvars import ContextVar
 from pathlib import Path
 from typing import Any, Optional
 
@@ -12,6 +13,23 @@ from config import chats_dir, get_spend_limits
 
 _LOCK = threading.Lock()
 _RUNS: dict[str, dict[str, Any]] = {}
+_CURRENT_RUN: ContextVar[Optional[str]] = ContextVar("ada_run_id", default=None)
+_CURRENT_CHAT: ContextVar[Optional[str]] = ContextVar("ada_chat_id", default=None)
+
+
+def set_current_ids(*, run_id: Optional[str] = None, chat_id: Optional[str] = None) -> None:
+    if run_id is not None:
+        _CURRENT_RUN.set(run_id or None)
+    if chat_id is not None:
+        _CURRENT_CHAT.set(chat_id or None)
+
+
+def current_run_id() -> Optional[str]:
+    return _CURRENT_RUN.get()
+
+
+def current_chat_id() -> Optional[str]:
+    return _CURRENT_CHAT.get()
 
 
 def estimate_tokens(text: str) -> int:
@@ -60,6 +78,7 @@ def start_run(*, chat_id: str = "", task_id: str = "", run_id: Optional[str] = N
     with _LOCK:
         _prune_runs_locked()
         _RUNS[rid] = rec
+    set_current_ids(run_id=rid, chat_id=chat_id or None)
     return public_run(rec)
 
 
@@ -153,11 +172,25 @@ def is_cancelled(run_id: Optional[str]) -> bool:
         return bool(ev and ev.is_set())
 
 
+def stop_reason(run_id: Optional[str]) -> Optional[str]:
+    """User-facing halt reason, or None if the run may continue."""
+    if not run_id:
+        return None
+    if is_cancelled(run_id):
+        return "Stopped by user."
+    ok, _info = spend_ok(run_id)
+    if not ok:
+        return "Stopped: token budget exceeded."
+    return None
+
+
 def cancel_run(run_id: str, reason: str = "user_stop") -> Optional[dict[str, Any]]:
     with _LOCK:
         rec = _RUNS.get(run_id)
         if not rec:
             return None
+        if rec.get("status") != "running":
+            return public_run(rec)
         ev = rec.get("cancel")
         if ev:
             ev.set()
@@ -250,7 +283,7 @@ def record_checkpoint(
     summary: str,
     payload: dict[str, Any],
 ) -> Optional[dict[str, Any]]:
-    rid = run_id or "orphan"
+    rid = run_id or current_run_id() or "orphan"
     cid = "cp_" + uuid.uuid4().hex[:10]
     rec = {
         "id": cid,
@@ -325,13 +358,50 @@ def restore_checkpoint(checkpoint_id: str) -> dict[str, Any]:
         before = payload.get("before")
         if rel is None or before is None:
             return {"ok": False, "error": "checkpoint has no file snapshot"}
-        from tools.workspace_io import write_file_raw
+        from agents.execution_policy import deny_if_blocked
+        from tools.workspace_io import write_file
 
+        blocked = deny_if_blocked("workspace_write")
+        if blocked:
+            return {**blocked, "id": cid, "kind": kind}
         try:
-            write_file_raw(rel, before)
+            write_file(rel, before)
         except Exception as e:
             return {"ok": False, "error": str(e)}
         return {"ok": True, "restored": rel, "kind": kind, "id": cid}
+    if kind == "overlay_turn":
+        from agents.execution_policy import deny_if_blocked
+        from tools.workspace_io import resolve_under_root, write_file_raw
+
+        blocked = deny_if_blocked("workspace_write")
+        if blocked:
+            return {**blocked, "id": cid, "kind": kind}
+        files = payload if isinstance(payload, dict) else {}
+        restored: list[str] = []
+        for rel, rec in files.items():
+            if not isinstance(rec, dict):
+                continue
+            try:
+                target = resolve_under_root(str(rel))
+            except (OSError, ValueError):
+                continue
+            before = rec.get("before")
+            try:
+                if rec.get("deleted"):
+                    if before is None:
+                        continue
+                    write_file_raw(str(rel), str(before))
+                    restored.append(str(rel))
+                elif before == "" and rec.get("after") is not None:
+                    if target.is_file():
+                        target.unlink()
+                        restored.append(str(rel))
+                elif before is not None:
+                    write_file_raw(str(rel), str(before))
+                    restored.append(str(rel))
+            except Exception as e:
+                return {"ok": False, "error": str(e), "restored": restored, "kind": kind, "id": cid}
+        return {"ok": True, "restored": restored, "kind": kind, "id": cid}
     return {
         "ok": False,
         "error": f"Cannot automatically undo {kind}. The command was recorded only.",

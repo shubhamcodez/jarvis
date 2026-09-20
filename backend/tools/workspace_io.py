@@ -54,6 +54,43 @@ def resolve_under_root(rel_path: str, root: Optional[Path] = None) -> Path:
     return target
 
 
+_SENSITIVE_DIR_NAMES = frozenset(
+    {
+        "windows",
+        "system32",
+        "syswow64",
+        "program files",
+        "program files (x86)",
+        "programdata",
+        "$recycle.bin",
+        "etc",
+        "usr",
+        "bin",
+        "sbin",
+        "root",
+        "proc",
+        "sys",
+        "dev",
+    }
+)
+
+
+def _is_sensitive_workspace(p: Path) -> str | None:
+    try:
+        resolved = p.resolve()
+    except OSError:
+        return None
+    parts = {part.lower() for part in resolved.parts}
+    if parts & _SENSITIVE_DIR_NAMES and len(resolved.parts) <= 3:
+        return f"Refusing to link a system path: {resolved}"
+    home = Path.home().resolve()
+    if resolved == home:
+        return "Refusing to link the entire home directory. Choose a project folder."
+    if resolved == resolved.anchor or str(resolved) in ("/", "C:\\", "C:/"):
+        return "Refusing to link a drive root."
+    return None
+
+
 def link_workspace(path: str) -> dict[str, Any]:
     p = Path(path or "").expanduser()
     try:
@@ -62,6 +99,9 @@ def link_workspace(path: str) -> dict[str, Any]:
         return {"ok": False, "error": str(e)}
     if not p.is_dir():
         return {"ok": False, "error": f"Not a directory: {p}"}
+    blocked = _is_sensitive_workspace(p)
+    if blocked:
+        return {"ok": False, "error": blocked}
     set_workspace_root(str(p))
     return {"ok": True, "path": str(p), "label": p.name}
 

@@ -1,0 +1,32 @@
+{
+  "identity": {
+    "name": null,
+    "pronouns": null,
+    "languages": null
+  },
+  "demographics": {
+    "age_range": null,
+    "gender": null,
+    "timezone": null
+  },
+  "personality": {
+    "communication": null,
+    "learning_style": null,
+    "risk_tolerance": null
+  },
+  "preferences": {
+    "tools_stack": null,
+    "editor_environment": null,
+    "code_style": null,
+    "docs_comments": null
+  },
+  "goals": {
+    "current_projects": null,
+    "standing_goals": null
+  },
+  "boundaries": {
+    "topics_avoid": null,
+    "accessibility_needs": null
+  },
+  "appendix_notes": []
+}

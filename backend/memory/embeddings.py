@@ -33,13 +33,19 @@ def embed_texts(api_key: str, texts: List[str]) -> List[List[float]]:
     if not cleaned:
         return [[] for _ in texts]
     client = _client(api_key)
-    resp = client.embeddings.create(input=cleaned, model=EMBEDDING_MODEL)
-    by_index = {obj.index: obj.embedding for obj in resp.data}
     out: List[List[float]] = [[] for _ in texts]
-    for local_i, orig_i in enumerate(keep):
-        vec = by_index.get(local_i)
-        if vec:
-            out[orig_i] = vec
+    batch = 64
+    for start in range(0, len(cleaned), batch):
+        piece = cleaned[start : start + batch]
+        try:
+            resp = client.embeddings.create(input=piece, model=EMBEDDING_MODEL)
+        except Exception:
+            continue
+        by_index = {obj.index: obj.embedding for obj in resp.data}
+        for local_i, orig_i in enumerate(keep[start : start + batch]):
+            vec = by_index.get(local_i)
+            if vec:
+                out[orig_i] = vec
     return out
 
 

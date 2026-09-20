@@ -174,6 +174,12 @@ async def _lifespan(_app: FastAPI):
     except Exception:
         pass
     try:
+        from auth.local_token import get_or_create_token
+
+        get_or_create_token()
+    except Exception:
+        pass
+    try:
         get_memory_store()
     except Exception:
         pass
@@ -200,25 +206,56 @@ async def _lifespan(_app: FastAPI):
             pass
 
 
-app = FastAPI(title="Ada API", lifespan=_lifespan)
+_CORS_ORIGINS = (
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "http://localhost:1420",
+    "http://127.0.0.1:1420",
+    "http://localhost:1430",
+    "http://127.0.0.1:1430",
+    "http://tauri.localhost",
+    "https://tauri.localhost",
+    "tauri://localhost",
+)
+_AUTH_PUBLIC_PATHS = frozenset({"/health", "/auth/google/callback"})
+
+app = FastAPI(
+    title="Ada API",
+    lifespan=_lifespan,
+    docs_url=None if is_packaged() else "/docs",
+    redoc_url=None if is_packaged() else "/redoc",
+    openapi_url=None if is_packaged() else "/openapi.json",
+)
 app.include_router(custom_agents_router)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
-        "http://localhost:1420",
-        "http://127.0.0.1:1420",
-        "http://localhost:1430",
-        "http://127.0.0.1:1430",
-        "http://tauri.localhost",
-        "https://tauri.localhost",
-        "tauri://localhost",
-    ],
+    allow_origins=list(_CORS_ORIGINS),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def _require_local_api_token(request: Request, call_next):
+    if request.method == "OPTIONS":
+        return await call_next(request)
+    path = request.url.path
+    if path in _AUTH_PUBLIC_PATHS:
+        return await call_next(request)
+    from auth.local_token import request_has_valid_token
+
+    allow_query = request.method == "GET" and path.startswith("/auth/google/login")
+    if request_has_valid_token(request, allow_query=allow_query):
+        return await call_next(request)
+    origin = (request.headers.get("origin") or "").strip()
+    headers = {}
+    if origin in _CORS_ORIGINS:
+        headers["Access-Control-Allow-Origin"] = origin
+        headers["Access-Control-Allow-Credentials"] = "true"
+        headers["Vary"] = "Origin"
+    return JSONResponse({"detail": "Unauthorized"}, status_code=401, headers=headers)
+
 
 # WebSocket connections for desktop-agent-step broadcasts
 _ws_connections: list[WebSocket] = []
@@ -284,6 +321,54 @@ def _strip_workspace_edits_from_reply(reply: str) -> tuple[str, list | None]:
     return clean, edits if edits else None
 
 
+def _maybe_append_goal_critic(chat_id: Optional[str], message: str, reply: str, tool_used) -> str:
+    """When `/goal` is set, run the critic once against that condition after the turn."""
+    if not chat_id or not (reply or "").strip():
+        return reply
+    try:
+        from memory.chat_log import get_chat_meta
+
+        cond = (get_chat_meta(chat_id).get("goal_condition") or "").strip()
+        if not cond:
+            return reply
+        from agents.swe_loop import critic_evaluate
+        from config import get_llm_api_key, get_llm_provider
+
+        tests = None
+        changed: list = []
+        tu = tool_used if isinstance(tool_used, dict) else {}
+        raw = tu.get("result")
+        parsed = raw
+        if isinstance(raw, str):
+            try:
+                parsed = json.loads(raw)
+            except json.JSONDecodeError:
+                parsed = {}
+        if isinstance(parsed, dict):
+            t = parsed.get("tests")
+            tests = t if isinstance(t, dict) else None
+            changed = list(parsed.get("changed") or [])
+        critic = critic_evaluate(
+            get_llm_api_key(),
+            get_llm_provider(),
+            cond,
+            changed,
+            tests,
+            None,
+            f"User: {(message or '')[:400]}\nReply: {(reply or '')[:1500]}",
+        )
+        line = f"\n\n**Goal check** (`{cond}`): passed={critic.get('passed')} score={critic.get('score')}"
+        issues = critic.get("issues") or []
+        if issues:
+            line += " — " + "; ".join(str(x) for x in issues[:3])
+        retry = (critic.get("retry_instructions") or "").strip()
+        if retry and not critic.get("passed"):
+            line += f"\n_{retry[:400]}_"
+        return reply + line
+    except Exception:
+        return reply
+
+
 def _agent_step_for_sse(payload: dict) -> dict:
     """Omit huge base64 screenshots from SSE JSON (WebSocket still carries them)."""
     return {
@@ -325,6 +410,17 @@ async def _emit_agent_step(
         "result": result,
         "done": done,
     }
+    try:
+        from agents.run_control import current_chat_id, current_run_id
+
+        cid = current_chat_id()
+        rid = current_run_id()
+        if cid:
+            payload["chat_id"] = cid
+        if rid:
+            payload["run_id"] = rid
+    except Exception:
+        pass
     if screenshot is not None:
         payload["screenshot"] = screenshot
     async with _ws_lock:
@@ -402,6 +498,14 @@ def _custom_agent_for_turn(custom_agent_id: Optional[str], chat_id: Optional[str
 
 
 def _schedule_turn_writeback(chat_id: Optional[str], message: str, reply: str = "") -> None:
+    try:
+        from agents.run_control import current_run_id, is_cancelled
+
+        rid = current_run_id()
+        if rid and is_cancelled(rid):
+            return
+    except Exception:
+        pass
     try:
         schedule_write_back(
             chat_id=chat_id or "",
@@ -531,6 +635,11 @@ async def chatbot_response(body: ChatbotResponseRequest):
     reply = ""
     tool_used = None
     t0 = time.perf_counter()
+    from agents.run_control import finish_run, start_run, set_current_ids
+
+    cr = start_run(chat_id="", task_id="")
+    cr_id = cr.get("run_id")
+    set_current_ids(run_id=cr_id)
     try:
         from tools.runner import run_tools_for_turn
         from memory.prompt_assembly import assemble_turn_context
@@ -563,7 +672,9 @@ async def chatbot_response(body: ChatbotResponseRequest):
         )
         schedule_post_turn_observability()
         _schedule_turn_writeback(None, msg, reply)
+        finish_run(cr_id)
     except Exception as e:
+        finish_run(cr_id, "error")
         trace_log(
             provider=provider,
             route="chat",
@@ -574,7 +685,7 @@ async def chatbot_response(body: ChatbotResponseRequest):
             duration_sec=time.perf_counter() - t0,
         )
         raise
-    out: dict = {"reply": reply}
+    out: dict = {"reply": reply, "run_id": cr_id}
     if tool_used:
         out["tool_used"] = tool_used
     return out
@@ -663,6 +774,10 @@ async def send_message(body: SendMessageRequest, request: Request):
     custom_sys = (
         build_agent_system_prompt(custom_profile, message) if custom_profile else None
     )
+    from agents.run_control import cancel_run, finish_run, is_cancelled, start_run, set_current_ids
+
+    ns_run = start_run(chat_id=chat_id or "", task_id="")
+    ns_run_id = ns_run.get("run_id")
     initial_state = {
         "message": message,
         "attachment_paths": attachment_paths,
@@ -678,36 +793,58 @@ async def send_message(body: SendMessageRequest, request: Request):
         "custom_agent_system": custom_sys,
         "custom_agent_tools": list(custom_profile.get("tools") or []) if custom_profile else None,
         "resume_task_id": body.resume_task_id,
+        "run_id": ns_run_id,
     }
     graph = _get_router_graph()
     drain_task = asyncio.create_task(drain_steps())
     start = time.perf_counter()
     file_edits = None
+    result = None
+    reply = ""
+    cancelled = False
     from observability.spans import span
 
+    set_current_ids(run_id=ns_run_id, chat_id=chat_id or "")
+
+    async def _watch_disconnect():
+        while True:
+            if await request.is_disconnected():
+                cancel_run(ns_run_id, "client_disconnect")
+                return
+            await asyncio.sleep(0.25)
+
+    watch = asyncio.create_task(_watch_disconnect())
     try:
         with span("turn", route="send-message", chat_id=chat_id or "", provider=provider):
             result = await graph.ainvoke(initial_state)
-        reply, file_edits = _strip_workspace_edits_from_reply(result.get("reply") or "No response.")
-        route = result.get("route") or "chat"
-        tool_used = result.get("tool_used")
-        if tool_used and chat_id:
-            set_current_chat(chat_id)
-            append_chat_log("tool", json.dumps(tool_used), chat_id=chat_id)
-        extra = _trace_extra(result)
-        extra["step_count"] = len((result.get("agent_state") or {}).get("plan") or [])
-        trace_log(
-            provider=provider,
-            route=route,
-            message=message,
-            reply=reply,
-            success=True,
-            duration_sec=time.perf_counter() - start,
-            extra=extra,
-        )
-        schedule_post_turn_observability()
-        _schedule_turn_writeback(chat_id, message, reply)
+        cancelled = is_cancelled(ns_run_id)
+        if cancelled:
+            finish_run(ns_run_id, "cancelled")
+            reply = (result or {}).get("reply") or "Stopped."
+        else:
+            reply, file_edits = _strip_workspace_edits_from_reply(result.get("reply") or "No response.")
+            route = result.get("route") or "chat"
+            tool_used = result.get("tool_used")
+            reply = _maybe_append_goal_critic(chat_id, message, reply, tool_used)
+            if tool_used and chat_id:
+                set_current_chat(chat_id)
+                append_chat_log("tool", json.dumps(tool_used), chat_id=chat_id)
+            extra = _trace_extra(result)
+            extra["step_count"] = len((result.get("agent_state") or {}).get("plan") or [])
+            trace_log(
+                provider=provider,
+                route=route,
+                message=message,
+                reply=reply,
+                success=True,
+                duration_sec=time.perf_counter() - start,
+                extra=extra,
+            )
+            schedule_post_turn_observability()
+            _schedule_turn_writeback(chat_id, message, reply)
+            finish_run(ns_run_id)
     except Exception as e:
+        finish_run(ns_run_id, "error")
         trace_log(
             provider=provider,
             route="chat",
@@ -720,17 +857,30 @@ async def send_message(body: SendMessageRequest, request: Request):
         )
         raise
     finally:
+        watch.cancel()
+        try:
+            await watch
+        except (asyncio.CancelledError, Exception):
+            pass
         step_queue.put(_SENTINEL)
         await drain_task
-    out = {"reply": reply}
+        rec_status = None
+        try:
+            from agents.run_control import get_run
+
+            rec = get_run(ns_run_id)
+            rec_status = rec.get("status") if rec else None
+        except Exception:
+            pass
+        if rec_status == "running":
+            finish_run(ns_run_id, "cancelled" if cancelled else "complete")
+    out = {"reply": reply, "run_id": ns_run_id}
     if file_edits:
         out["file_edits"] = file_edits
-    if result.get("tool_used"):
+    if isinstance(result, dict) and result.get("tool_used"):
         out["tool_used"] = result["tool_used"]
-    if result.get("pending_approvals"):
+    if isinstance(result, dict) and result.get("pending_approvals"):
         out["pending_approvals"] = result["pending_approvals"]
-    if result.get("run_id"):
-        out["run_id"] = result["run_id"]
     return out
 
 
@@ -841,17 +991,20 @@ async def send_message_stream(body: SendMessageRequest, request: Request):
             if usage and emitted % 8 == 0:
                 yield _sse_data({"type": "usage", **usage})
         reply, file_edits = _strip_workspace_edits_from_reply("".join(full))
+        cancelled = bool(run_id_ and is_cancelled(run_id_))
         if provider_ is not None and trace_user_message_ is not None:
             trace_log(
                 provider=provider_,
                 route="chat",
                 message=trace_user_message_,
                 reply=reply,
-                success=True,
+                success=not cancelled,
                 duration_sec=time.perf_counter() - t0,
+                extra={"cancelled": True} if cancelled else None,
             )
-            schedule_post_turn_observability()
-            _schedule_turn_writeback(chat_id_, trace_user_message_ or msg_, reply)
+            if not cancelled:
+                schedule_post_turn_observability()
+                _schedule_turn_writeback(chat_id_, trace_user_message_ or msg_, reply)
         payload = {"done": True, "reply": reply}
         if file_edits:
             payload["file_edits"] = file_edits
@@ -859,6 +1012,8 @@ async def send_message_stream(body: SendMessageRequest, request: Request):
             payload["tool_used"] = tool_used_
             if chat_id_:
                 append_chat_log("tool", json.dumps(tool_used_), chat_id=chat_id_)
+        if run_id_:
+            payload["run_id"] = run_id_
         yield f"data: {json.dumps(payload)}\n\n"
 
     def _chat_history_and_system():
@@ -937,6 +1092,7 @@ async def send_message_stream(body: SendMessageRequest, request: Request):
         return pack.history or None, sys_final, tool_used
 
     async def event_stream():
+        yield _sse_data({"type": "run", "run_id": stream_run_id})
         if chat_id and message and is_feedback_complaint(message):
             t_fb = time.perf_counter()
             yield _sse_data(
@@ -975,6 +1131,7 @@ async def send_message_stream(body: SendMessageRequest, request: Request):
                 fallback = f"Sorry, feedback review failed: {err}"
                 yield f"data: {json.dumps({'delta': fallback})}\n\n"
                 yield f"data: {json.dumps({'done': True, 'reply': fallback})}\n\n"
+            finish_run(stream_run_id)
             return
 
         # Attachments-only: go straight to chat stream
@@ -995,8 +1152,15 @@ async def send_message_stream(body: SendMessageRequest, request: Request):
                 trace_user_message_=message,
                 run_id_=stream_run_id,
             ):
+                if await request.is_disconnected():
+                    from agents.run_control import cancel_run
+
+                    cancel_run(stream_run_id, "client_disconnect")
+                    break
                 yield line
-            finish_run(stream_run_id)
+            from agents.run_control import is_cancelled as _is_cancelled
+
+            finish_run(stream_run_id, "cancelled" if _is_cancelled(stream_run_id) else "complete")
             return
 
         if not message:
@@ -1078,8 +1242,15 @@ async def send_message_stream(body: SendMessageRequest, request: Request):
                 trace_user_message_=message,
                 run_id_=stream_run_id,
             ):
+                if await request.is_disconnected():
+                    from agents.run_control import cancel_run
+
+                    cancel_run(stream_run_id, "client_disconnect")
+                    break
                 yield line
-            finish_run(stream_run_id)
+            from agents.run_control import is_cancelled as _is_cancelled
+
+            finish_run(stream_run_id, "cancelled" if _is_cancelled(stream_run_id) else "complete")
             return
 
         # Agent path: stream each step over SSE as it happens (WebSocket still gets full payload + screenshots)
@@ -1138,10 +1309,30 @@ async def send_message_stream(body: SendMessageRequest, request: Request):
         file_edits: list | None = None
         graph_task: asyncio.Task | None = None
 
+        stream_cancelled = False
+        result: dict = {}
         try:
+            from agents.run_control import is_cancelled, set_current_ids
+
+            set_current_ids(run_id=stream_run_id, chat_id=chat_id or "")
             graph_task = asyncio.create_task(graph.ainvoke(initial_state))
 
             while True:
+                if await request.is_disconnected():
+                    from agents.run_control import cancel_run
+
+                    cancel_run(stream_run_id, "client_disconnect")
+                    stream_cancelled = True
+                    graph_task.cancel()
+                    try:
+                        step_queue.put_nowait(_SENTINEL)
+                    except Exception:
+                        pass
+                    try:
+                        await graph_task
+                    except (asyncio.CancelledError, Exception):
+                        pass
+                    break
                 step_wait = asyncio.create_task(asyncio.to_thread(step_queue.get))
                 done_set, _ = await asyncio.wait(
                     {step_wait, graph_task},
@@ -1150,7 +1341,8 @@ async def send_message_stream(body: SendMessageRequest, request: Request):
                 if step_wait in done_set:
                     payload = step_wait.result()
                     if payload is _SENTINEL:
-                        await graph_task
+                        if not graph_task.done():
+                            await graph_task
                         break
                     await _emit_agent_step(
                         payload["step"],
@@ -1169,6 +1361,9 @@ async def send_message_stream(body: SendMessageRequest, request: Request):
                     await step_wait
                 except asyncio.CancelledError:
                     pass
+                if graph_task.cancelled():
+                    stream_cancelled = True
+                    break
                 exc = graph_task.exception()
                 if exc is not None:
                     try:
@@ -1197,25 +1392,53 @@ async def send_message_stream(body: SendMessageRequest, request: Request):
 
                 break
 
-            assert graph_task is not None
-            result = graph_task.result()
-            reply, file_edits = _strip_workspace_edits_from_reply(result.get("reply") or "No response.")
-            route = result.get("route") or "chat"
-            tool_used = result.get("tool_used")
-            if tool_used and chat_id:
-                append_chat_log("tool", json.dumps(tool_used), chat_id=chat_id)
-            extra = _trace_extra(result)
-            trace_log(
-                provider=provider,
-                route=route,
-                message=message,
-                reply=reply,
-                success=True,
-                duration_sec=time.perf_counter() - stream_start,
-                extra=extra,
-            )
-            schedule_post_turn_observability()
-            _schedule_turn_writeback(chat_id, message, reply)
+            if is_cancelled(stream_run_id):
+                stream_cancelled = True
+            if (
+                not stream_cancelled
+                and graph_task is not None
+                and graph_task.done()
+                and not graph_task.cancelled()
+            ):
+                result = graph_task.result() or {}
+                reply, file_edits = _strip_workspace_edits_from_reply(result.get("reply") or "No response.")
+                route = result.get("route") or "chat"
+                tool_used = result.get("tool_used")
+                reply = _maybe_append_goal_critic(chat_id, message, reply, tool_used)
+                if tool_used and chat_id:
+                    append_chat_log("tool", json.dumps(tool_used), chat_id=chat_id)
+                extra = _trace_extra(result)
+                trace_log(
+                    provider=provider,
+                    route=route,
+                    message=message,
+                    reply=reply,
+                    success=True,
+                    duration_sec=time.perf_counter() - stream_start,
+                    extra=extra,
+                )
+                schedule_post_turn_observability()
+                _schedule_turn_writeback(chat_id, message, reply)
+            elif stream_cancelled:
+                trace_log(
+                    provider=provider,
+                    route="chat",
+                    message=message,
+                    reply=reply or "",
+                    success=False,
+                    error="cancelled",
+                    duration_sec=time.perf_counter() - stream_start,
+                    extra={"cancelled": True},
+                )
+        except asyncio.CancelledError:
+            stream_cancelled = True
+            try:
+                from agents.run_control import cancel_run
+
+                cancel_run(stream_run_id, "client_disconnect")
+            except Exception:
+                pass
+            raise
         except Exception as e:
             trace_log(
                 provider=provider,
@@ -1227,12 +1450,18 @@ async def send_message_stream(body: SendMessageRequest, request: Request):
                 duration_sec=time.perf_counter() - stream_start,
                 extra={"failure_class": "infrastructure"},
             )
+            finish_run(stream_run_id, "error")
             raise
         finally:
             try:
                 step_queue.put_nowait(_SENTINEL)
             except Exception:
                 pass
+
+        if stream_cancelled:
+            finish_run(stream_run_id, "cancelled")
+            yield _sse_data({"done": True, "reply": reply or "Stopped.", "cancelled": True, "run_id": stream_run_id})
+            return
 
         yield _sse_data({"type": "status", "phase": "done", "message": "Agent finished"})
         payload = {"done": True, "reply": reply}
@@ -1252,8 +1481,31 @@ async def send_message_stream(body: SendMessageRequest, request: Request):
         finish_run(result.get("run_id") if isinstance(result, dict) else stream_run_id)
         yield f"data: {json.dumps(payload)}\n\n"
 
+    async def _guarded_stream():
+        try:
+            async for line in event_stream():
+                yield line
+        except asyncio.CancelledError:
+            try:
+                from agents.run_control import cancel_run
+
+                cancel_run(stream_run_id, "client_disconnect")
+            except Exception:
+                pass
+            finish_run(stream_run_id, "cancelled")
+            raise
+        finally:
+            try:
+                from agents.run_control import get_run
+
+                rec = get_run(stream_run_id)
+                if rec and rec.get("status") == "running":
+                    finish_run(stream_run_id, "cancelled")
+            except Exception:
+                pass
+
     return StreamingResponse(
-        event_stream(),
+        _guarded_stream(),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
@@ -1307,6 +1559,58 @@ async def api_handoff(chat_id: str):
     return {"ok": True, "markdown": handoff_markdown(chat_id, extra)}
 
 
+class ForkChatRequest(BaseModel):
+    chat_id: str
+    message_index: int = 0
+    label: str = ""
+
+
+class MergeChatRequest(BaseModel):
+    source_id: str
+    target_id: str = ""
+
+
+@app.post("/chat/fork")
+async def api_fork_chat(body: ForkChatRequest):
+    from memory.chat_log import fork_chat
+
+    _require_chat_id(body.chat_id)
+    result = fork_chat(body.chat_id, body.message_index, body.label)
+    if not result.get("ok"):
+        raise HTTPException(status_code=400, detail=result.get("error") or "fork failed")
+    return result
+
+
+@app.get("/chat/branches/{chat_id}")
+async def api_list_branches(chat_id: str):
+    from memory.chat_log import list_branches
+
+    _require_chat_id(chat_id)
+    return {"branches": list_branches(chat_id)}
+
+
+@app.get("/chat/meta/{chat_id}")
+async def api_chat_meta(chat_id: str):
+    from memory.chat_log import get_chat_meta
+
+    _require_chat_id(chat_id)
+    meta = get_chat_meta(chat_id)
+    if not meta.get("ok"):
+        raise HTTPException(status_code=404, detail="unknown chat")
+    return meta
+
+
+@app.post("/chat/merge")
+async def api_merge_chat(body: MergeChatRequest):
+    from memory.chat_log import merge_branch
+
+    _require_chat_id(body.source_id)
+    result = merge_branch(body.source_id, body.target_id)
+    if not result.get("ok"):
+        raise HTTPException(status_code=400, detail=result.get("error") or "merge failed")
+    return result
+
+
 @app.get("/chat/recap/{chat_id}")
 async def api_recap(chat_id: str):
     from memory.chat_search import recap_markdown
@@ -1314,6 +1618,48 @@ async def api_recap(chat_id: str):
 
     extra = structured_view(load_state(chat_id))
     return {"ok": True, "markdown": recap_markdown(chat_id, extra)}
+
+
+class SlashRequest(BaseModel):
+    command: str
+    args: str = ""
+    chat_id: str = ""
+
+
+@app.post("/chat/slash")
+async def api_slash(body: SlashRequest):
+    from tools.slash_runtime import run_slash
+
+    cid = (body.chat_id or "").strip()
+    if cid:
+        _require_chat_id(cid)
+    result = run_slash(body.command, body.args, chat_id=cid)
+    if result.get("kind") == "unknown" and not result.get("ok"):
+        raise HTTPException(status_code=404, detail=result.get("error") or "unknown command")
+    return result
+
+
+@app.get("/workspace/slash-catalog")
+async def api_slash_catalog():
+    from tools.slash_commands import catalog
+
+    return catalog()
+
+
+class RewindChatRequest(BaseModel):
+    chat_id: str
+    keep_count: Optional[int] = None
+
+
+@app.post("/chat/rewind")
+async def api_rewind_chat(body: RewindChatRequest):
+    from memory.chat_log import rewind_chat
+
+    _require_chat_id(body.chat_id)
+    result = rewind_chat(body.chat_id, keep_count=body.keep_count)
+    if not result.get("ok"):
+        raise HTTPException(status_code=400, detail=result.get("error") or "rewind failed")
+    return result
 
 
 class ReactionRequest(BaseModel):
@@ -1366,6 +1712,7 @@ async def api_usage():
     tout = sum(int(t.get("token_output") or 0) for t in traces)
     last = traces[-1] if traces else {}
     return {
+        "window": "last_80_traces",
         "recent_runs": len(traces),
         "token_input": tin,
         "token_output": tout,
@@ -1464,11 +1811,14 @@ class UserProfilePayload(BaseModel):
 
 @app.post("/memory/ingest")
 async def api_memory_ingest(body: IngestChatRequest):
-    """Ingest a chat's history into the vector store for retrieval. Requires OPENAI_API_KEY."""
+    """Ingest a chat's history into the vector store for retrieval."""
     try:
         api_key = get_openai_api_key()
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
+    except Exception:
+        try:
+            api_key = get_llm_api_key()
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
     store = get_memory_store()
     n = ingest_chat(store, api_key, body.chat_id)
     return {"ok": True, "chunks_added": n, "store_size": len(store)}
@@ -1921,7 +2271,9 @@ async def api_google_auth_callback(code: str | None = None, state: str | None = 
     if not code or not state:
         return RedirectResponse(url=callback_error_redirect("Missing OAuth code/state"))
     try:
-        sid, next_path = exchange_code_and_create_session(code=code, state=state)
+        sid, next_path = await asyncio.to_thread(
+            exchange_code_and_create_session, code=code, state=state
+        )
         redirect_url = callback_success_redirect(next_path)
         resp = RedirectResponse(url=redirect_url)
         resp.set_cookie(
@@ -2138,6 +2490,11 @@ async def send_message_with_files(
 # --- WebSocket for desktop-agent-step ---
 @app.websocket("/ws/agent-steps")
 async def websocket_agent_steps(ws: WebSocket):
+    from auth.local_token import ws_has_valid_token
+
+    if not ws_has_valid_token(ws):
+        await ws.close(code=4401)
+        return
     await ws.accept()
     async with _ws_lock:
         _ws_connections.append(ws)
@@ -2182,7 +2539,14 @@ async def api_tools_grep(
             base = Path(raw_root).expanduser().resolve()
         except OSError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        if allowed is None or not str(base).startswith(str(allowed.resolve())):
+        allowed_ok = False
+        if allowed is not None:
+            try:
+                base.relative_to(allowed.resolve())
+                allowed_ok = True
+            except ValueError:
+                allowed_ok = False
+        if not allowed_ok:
             ws = ""
             try:
                 from config import get_workspace_root

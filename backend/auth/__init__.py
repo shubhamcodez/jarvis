@@ -1,2 +1,2 @@
-"""Auth helpers for external identity providers."""
+"""Auth helpers for local API tokens and external identity providers."""
 

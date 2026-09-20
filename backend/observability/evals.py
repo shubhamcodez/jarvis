@@ -142,17 +142,15 @@ def load_eval_runs(limit: int = 2000) -> list[dict]:
         return []
     runs = []
     try:
-        with open(path, "r", encoding="utf-8") as f:
-            for i, line in enumerate(f):
-                if limit and i >= limit:
-                    break
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    runs.append(json.loads(line))
-                except json.JSONDecodeError:
-                    continue
+        data = path.read_text(encoding="utf-8")
+        raw = [ln.strip() for ln in data.splitlines() if ln.strip()]
+        if limit and len(raw) > limit:
+            raw = raw[-limit:]
+        for line in raw:
+            try:
+                runs.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
     except Exception:
         pass
     return runs

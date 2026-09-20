@@ -7,12 +7,14 @@ from observability.guards import should_force_replan, should_stop_streak
 
 
 def plan_unchanged(state: dict[str, Any]) -> bool:
+    """True only when work has happened but no plan step has finished."""
     plan = state.get("plan") or []
     if not plan:
         return False
-    return all((s.get("status") or "pending") in ("pending", "active") for s in plan) and len(
-        state.get("action_signatures") or []
-    ) >= 4
+    finished = any((s.get("status") or "pending") in ("complete", "error", "blocked") for s in plan)
+    if finished:
+        return False
+    return len(state.get("action_signatures") or []) >= 6
 
 
 def should_replan(state: dict[str, Any], last_error: Optional[str] = None) -> tuple[bool, str]:

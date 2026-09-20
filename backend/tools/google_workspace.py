@@ -209,12 +209,16 @@ def run_google_op(token: str, op: str, args: dict[str, Any]) -> dict[str, Any]:
                 max_results=int(a.get("max_results") or a.get("maxResults") or 25),
             )
         if op in ("event_create", "create_event", "calendar_event_create"):
+            start_dt = str(a.get("start_datetime") or a.get("start") or "").strip()
+            end_dt = str(a.get("end_datetime") or a.get("end") or "").strip()
+            if not start_dt or not end_dt:
+                return {"ok": False, "error": "event_create requires start_datetime and end_datetime"}
             return event_create(
                 token,
                 calendar_id=str(a.get("calendar_id") or "primary"),
                 summary=str(a.get("summary") or "Event"),
-                start_datetime=str(a.get("start_datetime") or a.get("start") or ""),
-                end_datetime=str(a.get("end_datetime") or a.get("end") or ""),
+                start_datetime=start_dt,
+                end_datetime=end_dt,
                 time_zone=str(a.get("time_zone") or a.get("timeZone") or "UTC"),
                 description=str(a.get("description") or ""),
                 attendees=a.get("attendees") if isinstance(a.get("attendees"), list) else None,

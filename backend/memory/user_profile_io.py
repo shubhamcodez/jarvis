@@ -39,6 +39,7 @@ _DEFAULT: dict = {
     "goals": {"current_projects": None, "standing_goals": None},
     "boundaries": {"topics_avoid": None, "accessibility_needs": None},
     "appendix_notes": [],
+    "extra": {},
 }
 
 
@@ -49,9 +50,14 @@ def deep_merge_defaults(data: dict | None) -> dict:
         return out
     for k, v in data.items():
         if k not in out:
+            extra = out.setdefault("extra", {})
+            extra[k] = v
             continue
         if k == "appendix_notes" and isinstance(v, list):
             out[k] = [str(x) for x in v if x is not None and str(x).strip()]
+            continue
+        if k == "extra" and isinstance(v, dict):
+            out["extra"] = {str(sk): sv for sk, sv in v.items()}
             continue
         if isinstance(v, dict) and isinstance(out[k], dict):
             for sk, sv in v.items():
@@ -84,3 +90,28 @@ def write_user_profile(data: dict) -> None:
             encoding="utf-8",
         )
         tmp.replace(path)
+
+
+def format_user_profile_for_prompt(max_chars: int = 1200) -> str:
+    """Stable, compact profile block for the system prefix."""
+    data = read_user_profile()
+    lines: list[str] = []
+    for section in ("identity", "demographics", "personality", "preferences", "goals", "boundaries"):
+        block = data.get(section) or {}
+        if not isinstance(block, dict):
+            continue
+        filled = [f"{k}={v}" for k, v in block.items() if v not in (None, "", [], {})]
+        if filled:
+            lines.append(f"{section}: " + "; ".join(filled))
+    notes = data.get("appendix_notes") or []
+    if isinstance(notes, list) and notes:
+        lines.append("notes: " + "; ".join(str(n)[:80] for n in notes[:6]))
+    extra = data.get("extra")
+    if isinstance(extra, dict) and extra:
+        lines.append("extra: " + "; ".join(f"{k}={v}" for k, v in list(extra.items())[:6] if v))
+    text = "\n".join(lines).strip()
+    if not text:
+        return ""
+    if len(text) > max_chars:
+        text = text[: max_chars - 1] + "…"
+    return "USER PROFILE:\n" + text

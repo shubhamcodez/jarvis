@@ -175,6 +175,10 @@ def _empty_store() -> dict[str, Any]:
     return {"pending": {}, "sessions": {}, "users": {}}
 
 
+def _is_encrypted_store(data: dict[str, Any]) -> bool:
+    return "blob" in data and str(data.get("v") or "") in ("2", "2.0")
+
+
 def _load_store() -> dict[str, Any]:
     p = _store_path()
     if not p.exists():
@@ -183,6 +187,13 @@ def _load_store() -> dict[str, Any]:
         data = json.loads(p.read_text(encoding="utf-8"))
         if not isinstance(data, dict):
             return _empty_store()
+        if _is_encrypted_store(data):
+            from auth.secret_box import open_json
+
+            opened = open_json(data)
+            if not isinstance(opened, dict):
+                return _empty_store()
+            data = opened
         data.setdefault("pending", {})
         data.setdefault("sessions", {})
         data.setdefault("users", {})
@@ -195,8 +206,13 @@ def _load_store() -> dict[str, Any]:
 def _save_store(data: dict[str, Any]) -> None:
     p = _store_path()
     p.parent.mkdir(parents=True, exist_ok=True)
+    from auth.secret_box import seal_json
+
+    payload = seal_json(data)
+    if not isinstance(payload, dict) or "blob" not in payload:
+        raise RuntimeError("OAuth store encryption failed; refusing to write plaintext tokens.")
     tmp = p.with_suffix(".tmp")
-    tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    tmp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     tmp.replace(p)
     try:
         os.chmod(p, 0o600)
@@ -264,11 +280,9 @@ def exchange_code_and_create_session(code: str, state: str) -> tuple[str, str]:
     with _LOCK:
         data = _load_store()
         _cleanup_expired(data)
-        pending = (data.get("pending") or {}).get(state)
+        pending = (data.get("pending") or {}).pop(state, None)
         if pending:
             pending = dict(pending)
-            pending["in_flight"] = True
-            data["pending"][state] = pending
             _save_store(data)
     if not pending:
         raise ValueError("Invalid or expired OAuth state.")
@@ -404,6 +418,19 @@ def _refresh_tokens_for_user(data: dict[str, Any], sub: str) -> str:
     return at
 
 
+_REFRESH_LOCKS: dict[str, threading.Lock] = {}
+_REFRESH_META = threading.Lock()
+
+
+def _refresh_lock_for(sub: str) -> threading.Lock:
+    with _REFRESH_META:
+        lock = _REFRESH_LOCKS.get(sub)
+        if lock is None:
+            lock = threading.Lock()
+            _REFRESH_LOCKS[sub] = lock
+        return lock
+
+
 def get_valid_access_token_for_session(session_id: str | None) -> tuple[str | None, str | None]:
     """
     Return (access_token, error_message). Refreshes the access token when stale or missing
@@ -433,43 +460,48 @@ def get_valid_access_token_for_session(session_id: str | None) -> tuple[str | No
         else:
             _save_store(data)
     if refresh_needed:
-        with _LOCK:
-            data = _load_store()
-            tok = ((data.get("users") or {}).get(refresh_sub) or {}).get("tokens") or {}
-            rt = (tok.get("refresh_token") or "").strip()
-        if not rt:
-            return None, "Missing refresh token. Sign in with Google again."
-        try:
-            body = _refresh_tokens_http(rt)
-            at = (body.get("access_token") or "").strip()
-            if not at:
-                raise ValueError("Token refresh did not return access_token.")
-        except Exception as e:
-            return None, str(e)
-        with _LOCK:
-            data = _load_store()
-            users = data.setdefault("users", {})
-            user = users.get(refresh_sub) or {}
-            tok = dict(user.get("tokens") or {})
-            exp_at = None
-            if body.get("expires_in") is not None:
-                try:
-                    exp_at = _now() + int(body["expires_in"])
-                except (TypeError, ValueError):
-                    pass
-            user["tokens"] = {
-                **tok,
-                "access_token": at,
-                "refresh_token": (body.get("refresh_token") or "").strip() or rt,
-                "expires_in": body.get("expires_in"),
-                "expires_at": exp_at if exp_at is not None else _now() + 3500,
-                "scope": body.get("scope") or tok.get("scope"),
-                "token_type": body.get("token_type") or tok.get("token_type"),
-            }
-            user["updated_at"] = _now()
-            users[refresh_sub] = user
-            _save_store(data)
-            access = at
+        rlock = _refresh_lock_for(refresh_sub)
+        with rlock:
+            with _LOCK:
+                data = _load_store()
+                tok = ((data.get("users") or {}).get(refresh_sub) or {}).get("tokens") or {}
+                if tok and not _access_token_stale(tok) and (tok.get("access_token") or "").strip():
+                    access = (tok.get("access_token") or "").strip()
+                    return access, None
+                rt = (tok.get("refresh_token") or "").strip()
+            if not rt:
+                return None, "Missing refresh token. Sign in with Google again."
+            try:
+                body = _refresh_tokens_http(rt)
+                at = (body.get("access_token") or "").strip()
+                if not at:
+                    raise ValueError("Token refresh did not return access_token.")
+            except Exception as e:
+                return None, str(e)
+            with _LOCK:
+                data = _load_store()
+                users = data.setdefault("users", {})
+                user = users.get(refresh_sub) or {}
+                tok = dict(user.get("tokens") or {})
+                exp_at = None
+                if body.get("expires_in") is not None:
+                    try:
+                        exp_at = _now() + int(body["expires_in"])
+                    except (TypeError, ValueError):
+                        pass
+                user["tokens"] = {
+                    **tok,
+                    "access_token": at,
+                    "refresh_token": (body.get("refresh_token") or "").strip() or rt,
+                    "expires_in": body.get("expires_in"),
+                    "expires_at": exp_at if exp_at is not None else _now() + 3500,
+                    "scope": body.get("scope") or tok.get("scope"),
+                    "token_type": body.get("token_type") or tok.get("token_type"),
+                }
+                user["updated_at"] = _now()
+                users[refresh_sub] = user
+                _save_store(data)
+                access = at
     if not access:
         return None, "No access token. Sign in with Google again."
     return access, None

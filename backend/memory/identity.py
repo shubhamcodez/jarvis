@@ -67,7 +67,7 @@ def write_identity(*, soul: str | None = None, user: str | None = None, memory: 
     return read_identity()
 
 
-def format_identity_for_prompt(max_chars: int = 3500) -> str:
+def format_identity_for_prompt(max_chars: int = 8000) -> str:
     data = read_identity()
     parts = []
     if data.get("soul"):

@@ -101,12 +101,10 @@ class OverlayWorkspace:
             text = data.decode("utf-8", errors="replace")
         lines = text.splitlines()
         start = max(1, int(offset or 1))
-        if limit and int(limit) > 0:
-            chunk = lines[start - 1 : start - 1 + int(limit)]
-            truncated = start - 1 + int(limit) < len(lines)
-        else:
-            chunk = lines[start - 1 :]
-            truncated = False
+        cap = int(limit) if limit and int(limit) > 0 else 400
+        cap = max(1, min(cap, 2000))
+        chunk = lines[start - 1 : start - 1 + cap]
+        truncated = start - 1 + cap < len(lines)
         numbered = "\n".join(f"{i}|{line}" for i, line in enumerate(chunk, start=start))
         return {
             "ok": True,
@@ -115,7 +113,7 @@ class OverlayWorkspace:
             "line_count": len(lines),
             "offset": start,
             "truncated": truncated,
-            "raw": text if not (limit and int(limit) > 0) else None,
+            "raw": text if (not truncated and len(text) <= 8000) else None,
         }
 
     def raw_text(self, rel_path: str) -> str:
@@ -190,6 +188,19 @@ class OverlayWorkspace:
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(content, encoding="utf-8")
         return dest_p
+
+    def originals_for_changed(self) -> dict[str, Any]:
+        """Disk snapshots for changed paths (call before apply_to_root)."""
+        out: dict[str, Any] = {}
+        for rel in self.changed_paths():
+            rec: dict[str, Any] = {"deleted": rel in self.deleted, "after": self.files.get(rel)}
+            try:
+                target = resolve_under(self.root, rel)
+                rec["before"] = target.read_text(encoding="utf-8") if target.is_file() else ""
+            except (OSError, ValueError):
+                rec["before"] = ""
+            out[rel] = rec
+        return out
 
     def apply_to_root(self) -> list[str]:
         written: list[str] = []

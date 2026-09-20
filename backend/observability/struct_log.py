@@ -54,10 +54,17 @@ _STD = {
 }
 
 
+_CONFIGURED = False
+
+
 def configure_struct_logging() -> None:
     """Attach a JSON formatter to ada.* loggers once (idempotent)."""
+    global _CONFIGURED
+    if _CONFIGURED:
+        return
     root = logging.getLogger("ada")
     if any(isinstance(h.formatter, JsonFormatter) for h in root.handlers if h.formatter):
+        _CONFIGURED = True
         return
     formatter = JsonFormatter()
     stream = logging.StreamHandler()
@@ -83,6 +90,7 @@ def configure_struct_logging() -> None:
         pass
     if root.level == logging.NOTSET:
         root.setLevel(logging.INFO)
+    _CONFIGURED = True
 
 
 def list_recent_logs(limit: int = 200) -> list[dict]:

@@ -7,3 +7,8 @@ commands.allow = ["pick_workspace_folder"]
 identifier = "allow-backend-health-hint"
 description = "Sidecar health URL"
 commands.allow = ["backend_health_hint"]
+
+[[permission]]
+identifier = "allow-api-token"
+description = "Read the local API token for the sidecar"
+commands.allow = ["api_token"]

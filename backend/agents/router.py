@@ -52,7 +52,7 @@ async def _supervisor_node(state: RouterState) -> RouterState:
         or message
     ).strip()
     from config import get_workspace_root
-    from .agent_state import begin_run
+    from .agent_state import begin_run, load_state
     from .task_spec import build_task_spec
 
     from agents.execution_policy import mode_label
@@ -86,18 +86,21 @@ async def _supervisor_node(state: RouterState) -> RouterState:
                 agents = []
         else:
             ast = begin_run(state.get("chat_id"), spec, agents, run_id=state.get("run_id"))
-    else:
+    elif agents or decision.get("run_agent"):
         ast = begin_run(state.get("chat_id"), spec, agents, run_id=state.get("run_id"))
-    try:
-        from agents.run_control import start_run
+    else:
+        ast = load_state(state.get("chat_id"))
+    if agents or decision.get("run_agent"):
+        try:
+            from agents.run_control import start_run
 
-        start_run(
-            chat_id=state.get("chat_id") or "",
-            task_id=ast.get("task_id") or "",
-            run_id=ast.get("run_id"),
-        )
-    except Exception:
-        pass
+            start_run(
+                chat_id=state.get("chat_id") or "",
+                task_id=ast.get("task_id") or "",
+                run_id=ast.get("run_id"),
+            )
+        except Exception:
+            pass
     return {
         "supervisor_decision": decision,
         "goal": goal,
@@ -175,16 +178,15 @@ async def _chat_node(state: RouterState) -> RouterState:
             allowed_tools=set(allowed) if allowed is not None else None,
         )
 
-    rules = load_project_rules()
-    mem = ((rules + "\n\n") if rules else "") + (memory_context or "")
     pack = assemble_turn_context(
         user_message=message,
         history=history,
-        memory_context=mem,
+        memory_context=memory_context or "",
         tool_system=tool_system or "",
         task_spec_text=format_task_spec_for_prompt(state.get("task_spec") or {}),
         agent_state_text=structured_view(state.get("agent_state") or {}),
         custom_agent_system=(state.get("custom_agent_system") or "").strip(),
+        project_rules=load_project_rules() or "",
         untrusted_tools=bool(wq),
     )
     system_content = pack.system or None
@@ -352,6 +354,7 @@ async def _run_agent_plan_node(state: RouterState) -> RouterState:
                         api_key,
                         provider,
                         project_context=state.get("coding_project_context") or None,
+                        run_id=run_id,
                     )
                 elif agent == "shell":
                     reply, tu = await asyncio.to_thread(
@@ -365,7 +368,12 @@ async def _run_agent_plan_node(state: RouterState) -> RouterState:
                     )
                 elif agent == "finance":
                     reply, tu = await asyncio.to_thread(
-                        run_finance_agent, goal_run, wrapped, api_key, provider
+                        run_finance_agent,
+                        goal_run,
+                        wrapped,
+                        api_key,
+                        provider,
+                        run_id,
                     )
                 elif agent == "google":
                     reply, tu = await asyncio.to_thread(
@@ -376,6 +384,7 @@ async def _run_agent_plan_node(state: RouterState) -> RouterState:
                         api_key,
                         provider,
                         state.get("chat_id"),
+                        run_id,
                     )
                 else:
                     finish_child(run_id, child_id, "skipped")
@@ -394,9 +403,8 @@ async def _run_agent_plan_node(state: RouterState) -> RouterState:
                 tool_ok = False
             elif isinstance(result, str) and ("failed" in result.lower() or '"ok": false' in result.lower()):
                 tool_ok = False
-        failed = (
-            (tu is None and ("failed:" in reply_l or "is not armed" in reply_l))
-            or not tool_ok
+        failed = (not tool_ok) or ("is not armed" in reply_l) or reply_l.startswith(
+            f"**{agent}** failed:"
         )
         if pending:
             finish_child(run_id, child_id, "blocked")
@@ -456,8 +464,8 @@ async def _run_agent_plan_node(state: RouterState) -> RouterState:
 
         save_state(ast)
         combined += (
-            f"\n\n_Control policy: no meaningful progress ({replan_why}). "
-            "Ask again if you want a different approach._"
+            f"\n\n_Control policy: stalled ({replan_why}). "
+            "No automatic replan was run — retry with a narrower goal if needed._"
         )
 
     out: RouterState = {

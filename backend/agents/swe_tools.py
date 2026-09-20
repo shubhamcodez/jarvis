@@ -5,9 +5,10 @@ import json
 from typing import Any, Optional
 
 from tools.artifact_store import read_artifact, write_artifact
-from tools.diagnostics import run_python_tests, syntax_check_python
+from tools.diagnostics import lsp_check_python, run_python_tests, syntax_check_python
 from tools.file_grep import grep_files
 from tools.overlay_workspace import OverlayWorkspace
+from tools.git_history import git_history
 from tools.python_sandbox import run_sandboxed_python
 
 TOOL_CATALOG = [
@@ -39,7 +40,7 @@ TOOL_CATALOG = [
         "name": "write_file",
         "risk": "write",
         "description": "Create or replace an entire file. Prefer apply_patch for edits.",
-        "args": {"path": "string", "content": "string"},
+        "args": {"path": "string", "content": "string", "reason": "required to replace an existing file"},
     },
     {
         "name": "run_tests",
@@ -52,6 +53,12 @@ TOOL_CATALOG = [
         "risk": "read",
         "description": "Execute a short Python snippet in the sandbox (no workspace disk).",
         "args": {"code": "string"},
+    },
+    {
+        "name": "git_history",
+        "risk": "read",
+        "description": "Read-only git log, blame, diff, or status. Never commits or pushes.",
+        "args": {"action": "log|blame|diff|status", "path": "optional", "limit": "int optional"},
     },
     {
         "name": "update_plan",
@@ -132,13 +139,33 @@ def dispatch(
     if n == "write_file":
         if not allow_writes:
             return {"ok": False, "error": "read-only subagent cannot write"}
-        return workspace.write(str(args.get("path") or ""), str(args.get("content") or ""))
+        rel = str(args.get("path") or "")
+        if workspace.exists(rel) and not str(args.get("reason") or "").strip():
+            return {
+                "ok": False,
+                "error": "file exists; use apply_patch, or pass reason= to replace the whole file",
+                "path": rel,
+            }
+        return workspace.write(rel, str(args.get("content") or ""))
     if n == "run_tests":
         syn = syntax_check_python(workspace)
+        lsp = lsp_check_python(workspace)
         tests = run_python_tests(workspace, path=str(args.get("path") or ""))
-        return {"ok": bool(tests.get("passed")) and bool(syn.get("ok")), "syntax": syn, "tests": tests}
+        return {
+            "ok": bool(tests.get("passed")) and bool(syn.get("ok")) and bool(lsp.get("ok")),
+            "syntax": syn,
+            "lsp": lsp,
+            "tests": tests,
+        }
     if n == "run_python":
         return run_sandboxed_python(str(args.get("code") or ""), timeout_sec=20.0)
+    if n == "git_history":
+        return git_history(
+            workspace.root,
+            str(args.get("action") or "log"),
+            path=str(args.get("path") or ""),
+            limit=int(args.get("limit") or 8),
+        )
     if n == "update_plan":
         items = args.get("items") if isinstance(args.get("items"), list) else []
         plan.clear()
@@ -152,6 +179,24 @@ def dispatch(
                     "text": str(it.get("text") or "")[:300],
                 }
             )
+        try:
+            lines = ["# Plan", ""]
+            for it in plan:
+                mark = {"done": "[x]", "active": "[>]", "pending": "[ ]"}.get(it.get("status") or "", "[ ]")
+                lines.append(f"- {mark} {it.get('text') or it.get('id')}")
+            write_artifact("PLAN.md", "\n".join(lines) + "\n", run_id=run_id, kind="plan")
+            write_artifact("PLAN.md", "\n".join(lines) + "\n", kind="plan")
+            try:
+                from agents.run_control import current_chat_id
+                from memory.chat_log import set_chat_plan
+
+                cid = current_chat_id()
+                if cid:
+                    set_chat_plan(cid, plan)
+            except Exception:
+                pass
+        except Exception:
+            pass
         return {"ok": True, "plan": plan}
     if n == "write_note":
         return write_artifact(str(args.get("name") or "note.md"), str(args.get("content") or ""), run_id=run_id)

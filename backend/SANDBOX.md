@@ -32,6 +32,18 @@ print("ADA_IMAGE_PNG:" + base64.b64encode(buf.getvalue()).decode())
 
 The coding agent turns that into a Markdown image so the frontend renders it. A **single stdout line** that is raw PNG base64 (`iVBOR…`) is also detected.
 
+## HTML / SVG live previews
+
+Print one line (raw markup, or base64 of the markup):
+
+```text
+ADA_PREVIEW_HTML:<div>hello</div>
+ADA_PREVIEW_SVG:<svg xmlns="http://www.w3.org/2000/svg" width="80" height="40"><rect width="80" height="40" fill="teal"/></svg>
+ADA_PREVIEW_MERMAID:graph TD; A[Start] --> B[Done]
+```
+
+The chat UI renders those fences in a sandboxed iframe (no scripts). You can also put ` ```html ` / ` ```svg ` / ` ```mermaid ` fences in a normal reply.
+
 **Logs & tool cards:** `stdout` in `tool_used`, WebSocket step payloads, retry prompts, and `POST /tools/python-sandbox` responses use **redacted** stdout (chart lines replaced with `[chart image hidden]`) so JSON isn’t huge. The assistant **reply** still contains rendered images.
 
 ## Security

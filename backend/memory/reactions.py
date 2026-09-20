@@ -2,11 +2,14 @@
 from __future__ import annotations
 
 import json
+import threading
 import time
 from pathlib import Path
 from typing import Any
 
 from config import data_root
+
+_LOCK = threading.Lock()
 
 
 def _path() -> Path:
@@ -29,14 +32,16 @@ def add_reaction(chat_id: str, vote: str, excerpt: str = "") -> dict[str, Any]:
         "vote": v,
         "excerpt": (excerpt or "")[:400],
     }
-    with _path().open("a", encoding="utf-8") as f:
-        f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+    with _LOCK:
+        with _path().open("a", encoding="utf-8") as f:
+            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
     if v == "down":
         try:
             from memory.facts import add_fact
 
             add_fact(
                 "User marked a recent assistant reply as unhelpful. Prefer a different approach next time.",
+                key="reaction_down",
                 source="reaction",
             )
         except Exception:

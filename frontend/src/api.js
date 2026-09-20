@@ -3,6 +3,24 @@ function detectDesktopShell() {
   return Boolean(window.__TAURI_INTERNALS__ || window.__TAURI__)
 }
 
+let _apiToken = ''
+
+export async function initApiAuth() {
+  if (typeof window === 'undefined' || _apiToken) return
+  if (!detectDesktopShell()) return
+  try {
+    const { invoke } = await import('@tauri-apps/api/core')
+    const t = await invoke('api_token')
+    if (typeof t === 'string' && t.trim()) _apiToken = t.trim()
+  } catch {
+    /* browser / missing command */
+  }
+}
+
+export function authHeaders() {
+  return _apiToken ? { 'X-Ada-Token': _apiToken } : {}
+}
+
 export function isDesktopShell() {
   return detectDesktopShell()
 }
@@ -15,11 +33,9 @@ export function getApiBase() {
   return '/api'
 }
 
-const API_BASE = getApiBase()
-
 async function request(path, options = {}) {
-  const url = path.startsWith('http') ? path : `${API_BASE}${path}`;
-  const headers = { ...(options.headers || {}) };
+  const url = path.startsWith('http') ? path : `${getApiBase()}${path}`;
+  const headers = { ...authHeaders(), ...(options.headers || {}) };
   if (options.body != null && !headers['Content-Type'] && !headers['content-type']) {
     headers['Content-Type'] = 'application/json';
   }
@@ -94,6 +110,7 @@ export async function sendMessageStream(
     onStatus,
     onAgentStep,
     onUsage,
+    onRun = null,
     webSearchQuery = null,
     codingMode = false,
     codingProjectSnapshot = null,
@@ -106,7 +123,7 @@ export async function sendMessageStream(
   const res = await fetch(base + '/chat/send-message/stream', {
     method: 'POST',
     credentials: 'include',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
     signal,
     body: JSON.stringify({
       message: message || '',
@@ -148,6 +165,10 @@ export async function sendMessageStream(
           continue
         }
         try {
+          if (data.type === 'run' && data.run_id) {
+            onRun?.(data.run_id)
+            continue
+          }
           if (data.type === 'status') {
             onStatus?.(data)
             continue
@@ -204,6 +225,7 @@ export async function sendMessageWithFiles(
   codingMode = false,
   codingProjectSnapshot = null,
   customAgentId = null,
+  signal = null,
 ) {
   const form = new FormData();
   form.append('message', message || '');
@@ -217,7 +239,13 @@ export async function sendMessageWithFiles(
   }
   const base = getApiBase();
   const url = base + '/chat/send-message-with-files';
-  const res = await fetch(url, { method: 'POST', body: form, credentials: 'include' });
+  const res = await fetch(url, {
+    method: 'POST',
+    body: form,
+    credentials: 'include',
+    signal,
+    headers: { ...authHeaders() },
+  });
   if (!res.ok) throw new Error(await res.text() || `HTTP ${res.status}`);
   const data = await res.json();
   return data.reply;
@@ -325,15 +353,20 @@ export async function loadLocalModel(modelId) {
 /** WebSocket URL for agent steps (use wsOrigin for WS) */
 export function agentStepsWsUrl() {
   const base = getApiBase() === '/api' ? (import.meta.env.VITE_API_URL || '') : getApiBase();
+  let url
   if (base.startsWith('http://')) {
-    return base.replace('http://', 'ws://') + '/ws/agent-steps';
+    url = base.replace('http://', 'ws://') + '/ws/agent-steps';
+  } else if (base.startsWith('https://')) {
+    url = base.replace('https://', 'wss://') + '/ws/agent-steps';
+  } else {
+    const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const host = window.location.host;
+    url = `${proto}//${host}/ws/agent-steps`;
   }
-  if (base.startsWith('https://')) {
-    return base.replace('https://', 'wss://') + '/ws/agent-steps';
+  if (_apiToken) {
+    url += (url.includes('?') ? '&' : '?') + 'token=' + encodeURIComponent(_apiToken)
   }
-  const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-  const host = window.location.host;
-  return `${proto}//${host}/ws/agent-steps`;
+  return url
 }
 
 export async function getGoogleAuthStatus() {
@@ -343,7 +376,10 @@ export async function getGoogleAuthStatus() {
 /** Gmail profile for current session; does not throw on HTTP errors (returns { ok: false, error }). */
 export async function getGmailProfile() {
   const base = getApiBase();
-  const res = await fetch(`${base}/integrations/gmail/profile`, { credentials: 'include' });
+  const res = await fetch(`${base}/integrations/gmail/profile`, {
+    credentials: 'include',
+    headers: { ...authHeaders() },
+  });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
     return { ok: false, error: data.error || `HTTP ${res.status}`, detail: data.detail };
@@ -354,7 +390,9 @@ export async function getGmailProfile() {
 export function getGoogleAuthLoginUrl(nextPath = '/settings') {
   const base = getApiBase()
   const path = nextPath && nextPath.startsWith('/') ? nextPath : '/settings'
-  return `${base}/auth/google/login?next=${encodeURIComponent(path)}`
+  let url = `${base}/auth/google/login?next=${encodeURIComponent(path)}`
+  if (_apiToken) url += `&token=${encodeURIComponent(_apiToken)}`
+  return url
 }
 
 export async function googleLogout() {
@@ -486,6 +524,28 @@ export async function getChatRecap(chatId) {
   return request(`/chat/recap/${encodeURIComponent(chatId)}`)
 }
 
+export async function forkChat(chatId, messageIndex, label = '') {
+  return request('/chat/fork', {
+    method: 'POST',
+    body: JSON.stringify({ chat_id: chatId, message_index: messageIndex, label }),
+  })
+}
+
+export async function listChatBranches(chatId) {
+  return request(`/chat/branches/${encodeURIComponent(chatId)}`)
+}
+
+export async function getChatMeta(chatId) {
+  return request(`/chat/meta/${encodeURIComponent(chatId)}`)
+}
+
+export async function mergeChat(sourceId, targetId = '') {
+  return request('/chat/merge', {
+    method: 'POST',
+    body: JSON.stringify({ source_id: sourceId, target_id: targetId || '' }),
+  })
+}
+
 export async function reactToReply(chatId, vote, excerpt = '') {
   return request('/chat/reaction', {
     method: 'POST',
@@ -510,6 +570,27 @@ export async function deleteBookmark(id) {
 
 export async function getUsageStats() {
   return request('/observability/usage')
+}
+
+export async function runSlash(command, args = '', chatId = '') {
+  return request('/chat/slash', {
+    method: 'POST',
+    body: JSON.stringify({ command, args: args || '', chat_id: chatId || '' }),
+  })
+}
+
+export async function rewindChat(chatId, keepCount = null) {
+  return request('/chat/rewind', {
+    method: 'POST',
+    body: JSON.stringify({
+      chat_id: chatId,
+      keep_count: keepCount == null ? null : keepCount,
+    }),
+  })
+}
+
+export async function getSlashCatalog() {
+  return request('/workspace/slash-catalog')
 }
 
 export async function getObservabilitySpans(limit = 200, traceId) {
@@ -615,6 +696,7 @@ export async function uploadCustomAgentKnowledge(agentId, files) {
     method: 'POST',
     body: form,
     credentials: 'include',
+    headers: { ...authHeaders() },
   })
   if (!res.ok) throw new Error((await res.text()) || `HTTP ${res.status}`)
   return res.json()

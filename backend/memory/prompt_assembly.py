@@ -79,6 +79,7 @@ def assemble_turn_context(
     agent_state_text: str = "",
     working_state: Optional[WorkingState] = None,
     custom_agent_system: str = "",
+    project_rules: str = "",
     untrusted_tools: bool = False,
 ) -> ContextPack:
     """
@@ -96,6 +97,9 @@ def assemble_turn_context(
     extra = (custom_agent_system or "").strip()
     if extra:
         stable.append(clip_to_tokens(extra, 800))
+    rules = (project_rules or "").strip()
+    if rules:
+        stable.append("PROJECT RULES:\n" + clip_to_tokens(rules, 400))
 
     try:
         from agents.execution_policy import plan_mode_system_note
@@ -109,9 +113,18 @@ def assemble_turn_context(
     try:
         from memory.identity import format_identity_for_prompt
 
-        ident = format_identity_for_prompt(max_chars=b["identity_tokens"] * 4)
+        ident = format_identity_for_prompt()
         if ident:
             stable.append("IDENTITY (authoritative):\n" + clip_to_tokens(ident, b["identity_tokens"]))
+    except Exception:
+        pass
+
+    try:
+        from memory.user_profile_io import format_user_profile_for_prompt
+
+        profile = format_user_profile_for_prompt()
+        if profile:
+            stable.append(clip_to_tokens(profile, 280))
     except Exception:
         pass
 

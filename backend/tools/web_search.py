@@ -65,8 +65,16 @@ def search_web(query: str, max_results: int = _DEFAULT_RESULTS) -> str:
             )
 
     try:
-        ddgs = DDGS()
-        hits = list(ddgs.text(q, max_results=n_results))
+        from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
+
+        def _search() -> list:
+            ddgs = DDGS()
+            return list(ddgs.text(q, max_results=n_results))
+
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            hits = pool.submit(_search).result(timeout=15)
+    except FuturesTimeout:
+        return f"Web search timed out for: {q!r}"
     except Exception as e:
         return f"Web search failed: {e}"
 

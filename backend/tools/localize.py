@@ -6,6 +6,7 @@ from collections import Counter
 from typing import Any
 
 from tools.file_grep import grep_files
+from tools.git_history import recent_touched_files
 from tools.overlay_workspace import OverlayWorkspace
 
 _STOP = frozenset(
@@ -84,6 +85,10 @@ def localize(workspace: OverlayWorkspace, goal: str, *, max_files: int = 8) -> d
             snippets.setdefault(rel, [])
             if len(snippets[rel]) < 3:
                 snippets[rel].append(f"{m.get('line')}: {(m.get('snippet') or '')[:160]}")
+    for rel in recent_touched_files(workspace.root, limit=6):
+        if rel.endswith((".md", ".rst", ".txt")):
+            continue
+        hits[rel] += 1
     ranked = [p for p, _ in hits.most_common(max_files)]
     if not ranked:
         ranked = [p for p in workspace.list_rel_paths(max_files=40) if p.endswith(".py")][:max_files]

@@ -56,6 +56,18 @@ def run_computer_use_loop(
         if _cancelled(run_id):
             trace.append("Stopped by user.")
             break
+        if run_id:
+            try:
+                from agents.run_control import add_tokens, spend_ok
+
+                ok_spend, info = spend_ok(run_id)
+                if not ok_spend:
+                    trace.append(
+                        f"Spend cap reached ({info.get('tokens_used')} / {info.get('max_tokens')} tokens)."
+                    )
+                    break
+            except Exception:
+                pass
         remaining = (deadline - time.time()) if deadline else None
         if remaining is not None and remaining <= 0:
             trace.append("Time budget reached.")
@@ -86,6 +98,13 @@ def run_computer_use_loop(
             vh,
             memory_text=mem.prompt_block(),
         )
+        if run_id:
+            try:
+                from agents.run_control import add_tokens
+
+                add_tokens(run_id, 900, 250)
+            except Exception:
+                pass
         thought = action.get("thought") or action.get("description") or action.get("action")
         desc = action.get("description") or action.get("action")
         act = (action.get("action") or "").lower()

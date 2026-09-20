@@ -124,7 +124,18 @@ def retrieve_facts(query: str, *, limit: int = 8) -> list[dict[str, Any]]:
             base = _score(item, now)
             scored.append((base + 2.5 * overlap, item))
         scored.sort(key=lambda x: x[0], reverse=True)
-        return [dict(item) for _, item in scored[: max(1, min(20, int(limit)))]]
+        picked = [item for _, item in scored[: max(1, min(20, int(limit)))]]
+        now2 = time.time()
+        ids = {item.get("id") for item in picked}
+        changed = False
+        for item in items:
+            if item.get("id") in ids:
+                item["uses"] = int(item.get("uses") or 0) + 1
+                item["last_used"] = now2
+                changed = True
+        if changed:
+            _save(items)
+        return [dict(item) for item in picked]
 
 
 def format_facts_for_prompt(items: list[dict[str, Any]]) -> str:

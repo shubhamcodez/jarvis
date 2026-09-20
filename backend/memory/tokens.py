@@ -1,32 +1,51 @@
 """Token estimates and budget clipping for context assembly.
 
-Uses the same ~4 chars/token heuristic as run_control.estimate_tokens so budgets
-stay consistent with spend caps. Production systems (tiktoken) can replace this
-without changing callers.
+Conservative heuristic (no extra dependency): ASCII ~3 chars/token, non-ASCII
+1 char/token. Overestimates vs English so budgets fail closed and do not
+silently overflow provider windows.
 """
 from __future__ import annotations
 
 
 def estimate_tokens(text: str) -> int:
-    return max(0, (len(text or "") + 3) // 4)
+    t = text or ""
+    if not t:
+        return 0
+    non_ascii = 0
+    for ch in t:
+        if ord(ch) > 127:
+            non_ascii += 1
+    ascii_n = len(t) - non_ascii
+    return max(1, (ascii_n + 2) // 3 + non_ascii)
 
 
 def clip_to_tokens(text: str, budget: int, *, suffix: str = "…") -> str:
-    """Keep the start of `text` within `budget` tokens."""
+    """Keep the start of `text` within `budget` tokens (binary search)."""
     if budget <= 0 or not text:
         return ""
     if estimate_tokens(text) <= budget:
         return text
-    # 4 chars per token, leave room for suffix
-    keep = max(1, budget * 4 - len(suffix))
-    return text[:keep] + suffix
+    lo, hi = 0, len(text)
+    while lo < hi:
+        mid = (lo + hi + 1) // 2
+        if estimate_tokens(text[:mid] + suffix) <= budget:
+            lo = mid
+        else:
+            hi = mid - 1
+    return (text[:lo] + suffix) if lo else suffix
 
 
 def clip_tail_to_tokens(text: str, budget: int, *, prefix: str = "…") -> str:
-    """Keep the end of `text` within `budget` tokens (recent tail)."""
+    """Keep the end of `text` within `budget` tokens (binary search)."""
     if budget <= 0 or not text:
         return ""
     if estimate_tokens(text) <= budget:
         return text
-    keep = max(1, budget * 4 - len(prefix))
-    return prefix + text[-keep:]
+    lo, hi = 0, len(text)
+    while lo < hi:
+        mid = (lo + hi + 1) // 2
+        if estimate_tokens(prefix + text[-mid:]) <= budget:
+            lo = mid
+        else:
+            hi = mid - 1
+    return (prefix + text[-lo:]) if lo else prefix

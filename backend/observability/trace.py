@@ -97,17 +97,17 @@ def trace_log(
     except Exception:
         pass
     try:
-        from .redact import redact_text
-        from .metrics import incr, observe, flush
+        from .redact import redact_text, redact_value
+        from .metrics import incr, observe
 
         record["message"] = redact_text(str(record.get("message") or ""), max_len=2000)
         record["reply"] = redact_text(str(record.get("reply") or ""), max_len=4000)
+        record = redact_value(record)
         incr("turns.total", provider=provider, route=route)
         incr("turns.success" if success else "turns.error", provider=provider, route=route)
         observe("turn.duration_sec", float(duration_sec or 0), provider=provider)
         observe("turn.tokens_in", float(token_input or 0), provider=provider)
         observe("turn.tokens_out", float(token_output or 0), provider=provider)
-        flush()
     except Exception:
         pass
     try:

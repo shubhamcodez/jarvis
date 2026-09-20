@@ -15,12 +15,23 @@ _COUNTERS: dict[str, float] = defaultdict(float)
 _SUM: dict[str, float] = defaultdict(float)
 _COUNT: dict[str, int] = defaultdict(int)
 _LAST_FLUSH = 0.0
+_MAX_KEYS = 400
+
+
+def _evict_if_needed() -> None:
+    if len(_COUNTERS) + len(_SUM) <= _MAX_KEYS:
+        return
+    for store in (_COUNTERS, _SUM, _COUNT):
+        extra = max(0, len(store) - _MAX_KEYS // 2)
+        for k in list(store.keys())[:extra]:
+            store.pop(k, None)
 
 
 def incr(name: str, value: float = 1.0, **labels: Any) -> None:
     key = _key(name, labels)
     with _LOCK:
         _COUNTERS[key] += value
+        _evict_if_needed()
 
 
 def observe(name: str, value: float, **labels: Any) -> None:
@@ -28,6 +39,7 @@ def observe(name: str, value: float, **labels: Any) -> None:
     with _LOCK:
         _SUM[key] += float(value)
         _COUNT[key] += 1
+        _evict_if_needed()
 
 
 def snapshot() -> dict[str, Any]:

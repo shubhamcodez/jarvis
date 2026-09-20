@@ -72,6 +72,7 @@ def run_finance_agent(
     on_step: Optional[Callable] = None,
     api_key: Optional[str] = None,
     provider: str = "openai",
+    run_id: Optional[str] = None,
 ) -> tuple[str, dict]:
     """
     Plan → yfinance fetch → analysis LLM.
@@ -81,6 +82,16 @@ def run_finance_agent(
         from config import get_llm_api_key
 
         api_key = get_llm_api_key()
+
+    if run_id:
+        try:
+            from agents.run_control import stop_reason
+
+            halt = stop_reason(run_id)
+            if halt:
+                return halt, {}
+        except Exception:
+            pass
 
     goal = (goal or "").strip()
     if not goal:
@@ -136,6 +147,16 @@ def run_finance_agent(
     if on_step:
         on_step(0, plan_summary, "plan", plan_summary, None, False, screenshot_base64=None)
 
+    if run_id:
+        try:
+            from agents.run_control import stop_reason
+
+            halt = stop_reason(run_id)
+            if halt:
+                return halt, {}
+        except Exception:
+            pass
+
     bundle = fetch_finance_bundle(
         tickers,
         history_period=period,
@@ -157,7 +178,7 @@ def run_finance_agent(
     user_analysis = (
         f"**User question (restated):** {restated}\n\n"
         f"**Original message:** {goal}\n\n"
-        f"**yfinance data (JSON):**\n```json\n{bundle_json[:24000]}\n```"
+        f"**yfinance data (JSON):**\n```json\n{bundle_json[:8000]}\n```"
     )
     create_kw2: dict = {
         "model": model,

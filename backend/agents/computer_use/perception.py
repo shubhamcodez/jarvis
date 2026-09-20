@@ -32,14 +32,16 @@ class ScreenShot:
     height: int
     mouse_scale_x: float = 1.0
     mouse_scale_y: float = 1.0
+    origin_x: int = 0
+    origin_y: int = 0
 
     @property
     def b64(self) -> str:
         return base64.b64encode(self.png).decode("ascii")
 
     def to_mouse(self, x: float, y: float) -> tuple[int, int]:
-        mx = int(round(float(x) * self.mouse_scale_x))
-        my = int(round(float(y) * self.mouse_scale_y))
+        mx = int(round(float(x) * self.mouse_scale_x)) + int(self.origin_x)
+        my = int(round(float(y) * self.mouse_scale_y)) + int(self.origin_y)
         return mx, my
 
 
@@ -53,19 +55,57 @@ def _mouse_size() -> tuple[int, int]:
         return 0, 0
 
 
+def dpi_mouse_mapping(
+    capture_w: int,
+    capture_h: int,
+    origin_x: int,
+    origin_y: int,
+    mouse_w: int = 0,
+    mouse_h: int = 0,
+) -> tuple[float, float, int, int]:
+    """Map screenshot pixels → OS mouse space (logical pixels on DPI-scaled displays)."""
+    sx = 1.0
+    sy = 1.0
+    if mouse_w > 0 and capture_w > 0:
+        sx = float(mouse_w) / float(capture_w)
+    if mouse_h > 0 and capture_h > 0:
+        sy = float(mouse_h) / float(capture_h)
+    sx = min(4.0, max(0.25, sx))
+    sy = min(4.0, max(0.25, sy))
+    if abs(sx - 1.0) < 0.02:
+        sx = 1.0
+    if abs(sy - 1.0) < 0.02:
+        sy = 1.0
+    ox = int(round(float(origin_x) * sx))
+    oy = int(round(float(origin_y) * sy))
+    return sx, sy, ox, oy
+
+
 def capture_screen() -> ScreenShot:
     if not HAS_MSS:
         raise RuntimeError("mss not installed. pip install mss")
     with mss.mss() as sct:
-        mon = sct.monitors[0]
+        # monitors[0] is the virtual desktop (all screens). Use the primary
+        # display so mouse coords from pyautogui.size() line up.
+        mons = sct.monitors
+        mon = mons[1] if len(mons) > 1 else mons[0]
         width = int(mon["width"])
         height = int(mon["height"])
         shot = sct.grab(mon)
         png = mss.tools.to_png(shot.rgb, shot.size)
+    left = int(mon.get("left") or 0)
+    top = int(mon.get("top") or 0)
     mw, mh = _mouse_size()
-    sx = (mw / width) if width and mw else 1.0
-    sy = (mh / height) if height and mh else 1.0
-    return ScreenShot(png=png, width=width, height=height, mouse_scale_x=sx, mouse_scale_y=sy)
+    sx, sy, ox, oy = dpi_mouse_mapping(width, height, left, top, mw, mh)
+    return ScreenShot(
+        png=png,
+        width=width,
+        height=height,
+        mouse_scale_x=sx,
+        mouse_scale_y=sy,
+        origin_x=ox,
+        origin_y=oy,
+    )
 
 
 def decode_png(png: bytes) -> "Image.Image":

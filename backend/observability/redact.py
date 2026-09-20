@@ -9,6 +9,10 @@ _KEY_LINE = re.compile(
 _BEARER = re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._\-+=/]{8,}")
 _EMAIL = re.compile(r"\b[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}\b")
 _SK = re.compile(r"\b(?:sk|xai)-[A-Za-z0-9]{12,}\b")
+_JWT = re.compile(r"\beyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}\b")
+_GITHUB = re.compile(r"\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{20,}\b")
+_AWS = re.compile(r"\b(?:AKIA|ASIA)[A-Z0-9]{16}\b")
+_QUERY_SECRET = re.compile(r"(?i)([?&](?:token|access_token|api_key|key|secret|password)=)[^&\s]+")
 
 
 def redact_text(text: str, *, emails: bool = False, max_len: int = 4000) -> str:
@@ -16,6 +20,10 @@ def redact_text(text: str, *, emails: bool = False, max_len: int = 4000) -> str:
     raw = _KEY_LINE.sub(lambda m: f"{m.group(1)}{m.group(2)}***", raw)
     raw = _BEARER.sub("Bearer ***", raw)
     raw = _SK.sub("***", raw)
+    raw = _JWT.sub("[jwt]", raw)
+    raw = _GITHUB.sub("[gh_token]", raw)
+    raw = _AWS.sub("[aws_key]", raw)
+    raw = _QUERY_SECRET.sub(r"\1***", raw)
     if emails:
         raw = _EMAIL.sub("[email]", raw)
     if len(raw) > max_len:

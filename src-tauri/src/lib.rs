@@ -113,9 +113,47 @@ fn pick_workspace_folder() -> Option<String> {
         .map(|p| p.to_string_lossy().to_string())
 }
 
+fn api_token_path(packaged: bool) -> PathBuf {
+    if packaged {
+        let appdata = std::env::var("APPDATA")
+            .or_else(|_| std::env::var("HOME"))
+            .unwrap_or_else(|_| ".".into());
+        let mut p = PathBuf::from(appdata);
+        if cfg!(target_os = "windows") {
+            p.push("Ada");
+        } else if cfg!(target_os = "macos") {
+            p.push("Library");
+            p.push("Application Support");
+            p.push("Ada");
+        } else {
+            p.push(".local");
+            p.push("share");
+            p.push("Ada");
+        }
+        p.push(".secrets");
+        p.push("ada-api-token");
+        p
+    } else {
+        repo_root().join(".secrets").join("ada-api-token")
+    }
+}
+
+fn read_api_token() -> String {
+    let packaged = !cfg!(debug_assertions);
+    std::fs::read_to_string(api_token_path(packaged))
+        .unwrap_or_default()
+        .trim()
+        .to_string()
+}
+
 #[tauri::command]
 fn backend_health_hint() -> String {
     "http://127.0.0.1:8000/health".into()
+}
+
+#[tauri::command]
+fn api_token() -> String {
+    read_api_token()
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -124,7 +162,8 @@ pub fn run() {
         .manage(BackendChild(Mutex::new(None)))
         .invoke_handler(tauri::generate_handler![
             pick_workspace_folder,
-            backend_health_hint
+            backend_health_hint,
+            api_token
         ])
         .setup(|app| {
             let handle = app.handle().clone();

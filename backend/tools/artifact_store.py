@@ -30,6 +30,8 @@ def write_artifact(
         safe = "note"
     path = artifacts_root(run_id) / safe
     text = content if isinstance(content, str) else json.dumps(content, ensure_ascii=False)
+    if len(text) > 2_000_000:
+        return {"ok": False, "error": "artifact exceeds 2MB limit", "name": safe}
     path.write_text(text, encoding="utf-8")
     summary = text.strip().replace("\n", " ")
     if len(summary) > 240:

@@ -111,10 +111,11 @@ def run_shell_agent(
     for step_i in range(1, max_steps + 1):
         if run_id:
             try:
-                from agents.run_control import is_cancelled
+                from agents.run_control import stop_reason
 
-                if is_cancelled(run_id):
-                    transcript.append("Stopped by user.")
+                halt = stop_reason(run_id)
+                if halt:
+                    transcript.append(halt)
                     break
             except Exception:
                 pass
@@ -154,7 +155,7 @@ def run_shell_agent(
         result = maybe_gate_shell(
             command,
             chat_id=chat_id,
-            execute=lambda cmd=command: run_shell_command(cmd),
+            execute=lambda cmd=command: run_shell_command(cmd, run_id=run_id),
         )
         if result.get("pending_approval"):
             last_tool_result = json.dumps(result, ensure_ascii=False)[:8000]

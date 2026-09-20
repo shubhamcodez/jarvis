@@ -74,7 +74,7 @@ def format_retrieved_for_prompt(
             lines.append("- … additional hits omitted (memory token budget)")
             break
         lines.append(block)
-        used += cost
+        used += cost + 1
     return "\n".join(lines)
 
 

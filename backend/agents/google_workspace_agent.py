@@ -87,6 +87,7 @@ def run_google_workspace_agent(
     api_key: Optional[str] = None,
     provider: str = "openai",
     chat_id: Optional[str] = None,
+    run_id: Optional[str] = None,
 ) -> tuple[str, dict]:
     """
     Plan Calendar/Gmail ops → execute with user OAuth token → LLM summary.
@@ -99,6 +100,16 @@ def run_google_workspace_agent(
     goal = (goal or "").strip()
     if not goal:
         return "No request provided.", {}
+
+    if run_id:
+        try:
+            from agents.run_control import stop_reason
+
+            halt = stop_reason(run_id)
+            if halt:
+                return halt, {}
+        except Exception:
+            pass
 
     token, err = get_valid_access_token_for_session(google_session_id)
     if not token:
@@ -140,6 +151,16 @@ def run_google_workspace_agent(
     results: list[dict[str, Any]] = []
     step_n = 1
     for entry in operations:
+        if run_id:
+            try:
+                from agents.run_control import stop_reason
+
+                halt = stop_reason(run_id)
+                if halt:
+                    results.append({"op": "stop", "args": {}, "result": {"ok": False, "error": halt}})
+                    break
+            except Exception:
+                pass
         op, args = _extract_op_entry(entry)
         if not op:
             continue

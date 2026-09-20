@@ -13,6 +13,33 @@ export const CHAT_HELP_MANUAL_MARKDOWN = `
 | \`/recap\` | Structured recovery: current task, last result, files, next step. |
 | \`/btw …\` or \`/side …\` | Side question that does **not** start an agent plan. |
 | \`/search-memory …\` | Search other chats for a past decision or fix. |
+| **Fork** on a message | New chat from that point (try another approach). **Merge back** returns findings to the parent. |
+| \`/diff\` | Git status + unstaged/staged diff of the linked workspace. |
+| \`/review\` | Read-only pass over the current diff (cheap risk flags, no extra model call). |
+| \`/rewind\` [N] | Drop the last reply, or keep the first N messages. Also on the last assistant message. |
+| \`/undo\` | Restore the last workbench edit, else the latest server checkpoint. |
+| \`/usage\` / \`/cost\` / \`/stats\` | Token totals for recent traces. |
+| \`/init\` | Write a starter \`AGENTS.md\` if missing (\`/init force\` replaces). |
+| \`/doctor\` | Setup checkup (keys present, workspace, git, skills) — never prints secret values. |
+| \`/commands\` | List workspace skills and file-based commands. |
+| \`/skill name …\` or \`/name\` | Run a \`SKILL.md\` or \`.agents/commands/*.md\` playbook (\`$ARGUMENTS\` expanded). |
+| \`/export\` | Download the full transcript as Markdown (also copied when allowed). |
+| \`/rename [name]\` | Rename this chat. Omit the name to auto-title from the first real message. |
+| \`/copy [N]\` | Copy the last assistant reply (or the Nth-latest) to the clipboard. |
+| \`/context\` | Estimated tokens in this chat plus recent usage. |
+| \`/plan [task]\` | Switch to Plan mode (no writes). With a task, start that planning turn. |
+| \`/notify\` | Ask the browser for desktop alerts when a run finishes or needs approval (background tab). |
+| \`/loop [5m] [prompt]\` | Repeat a short check-in while the backend is up (\`/loop stop\`). Mentions of tests run workspace tests read-only. |
+| \`/tasks\` or \`/bashes\` | Durable tasks plus in-flight runs. |
+| \`/goal [condition]\` | Pin a done-condition; the critic runs once after each turn (\`/goal clear\`). |
+| Type \`/\` | Autocomplete built-in, workspace, and skill commands. |
+| Apply all / Discard | Bar above chat when Ada proposed file edits — write or drop the whole batch. |
+| \`/plan show\` | Last SWE \`update_plan\` (also kept on the chat and shown as the todo strip). |
+| \`/model [openai\\|xai\\|local]\` | Show or switch the LLM provider. |
+| \`/cd [path]\` | Show or relink the project workspace. |
+| \`/effort low\\|medium\\|high\` | Spend cap per run (20k / 80k / 200k tokens). |
+| Mermaid fences | \`\`\`mermaid graph/flowchart blocks render locally; other diagram types show a fallback. |
+| HTML / SVG fences | Assistant \`html\` / \`svg\` blocks (or \`ADA_PREVIEW_*\` from the sandbox) render as a sandboxed live preview. |
 | \`/stop\` | Cancel the current run. |
 | \`remember …\` | Store an exact fact (decays if unused). |
 

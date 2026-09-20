@@ -72,6 +72,14 @@ class VectorStore:
             if self._dim is None:
                 self._dim = len(embedding)
             elif len(embedding) != self._dim:
+                import logging
+
+                logging.getLogger("ada.memory").warning(
+                    "drop chunk %s: embedding dim %s != store %s",
+                    chunk.chunk_id,
+                    len(embedding),
+                    self._dim,
+                )
                 return
             meta = dict(chunk.metadata or {})
             meta.setdefault("ingested_at", time.time())
@@ -85,11 +93,30 @@ class VectorStore:
                 self._chunks.append(chunk)
                 self._embeddings.append(embedding)
             if len(self._chunks) > self._max_chunks:
-                drop = len(self._chunks) - self._max_chunks
-                self._chunks = self._chunks[drop:]
-                self._embeddings = self._embeddings[drop:]
+                scored = []
+                now = time.time()
+                for i, c in enumerate(self._chunks):
+                    ingested = float((c.metadata or {}).get("ingested_at") or 0.0)
+                    boost = _SOURCE_BOOST.get(c.source_type, 0.0)
+                    scored.append((ingested + boost * 86400.0 * 7, i))
+                scored.sort()
+                drop_n = len(self._chunks) - self._max_chunks
+                drop_idx = set(i for _, i in scored[:drop_n])
+                keep_c = []
+                keep_e = []
+                for i, (c, e) in enumerate(zip(self._chunks, self._embeddings)):
+                    if i in drop_idx:
+                        continue
+                    keep_c.append(c)
+                    keep_e.append(e)
+                self._chunks = keep_c
+                self._embeddings = keep_e
                 self._index = {c.chunk_id: i for i, c in enumerate(self._chunks)}
             self._dirty = True
+
+    def has(self, chunk_id: str) -> bool:
+        with self._lock:
+            return chunk_id in self._index
 
     def search(
         self,
@@ -144,7 +171,7 @@ class VectorStore:
             if not self._dirty:
                 return
             path = _store_path()
-            tmp = path.with_suffix(".jsonl.tmp")
+            tmp = path.with_name(f"{path.stem}.{threading.get_ident()}.{int(time.time() * 1000)}.tmp")
             with tmp.open("w", encoding="utf-8") as f:
                 for chunk, emb in zip(self._chunks, self._embeddings):
                     rec = {
@@ -159,6 +186,13 @@ class VectorStore:
                         "embedding": [round(float(x), 6) for x in emb],
                     }
                     f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+                f.flush()
+                try:
+                    import os
+
+                    os.fsync(f.fileno())
+                except OSError:
+                    pass
             tmp.replace(path)
             self._dirty = False
 
@@ -167,43 +201,51 @@ class VectorStore:
         if not path.exists():
             return 0
         n = 0
-        try:
-            for line in path.read_text(encoding="utf-8").splitlines():
-                if not line.strip():
-                    continue
-                try:
-                    rec = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                raw = rec.get("chunk") or {}
-                emb = rec.get("embedding") or []
-                if not raw.get("chunk_id") or not emb:
-                    continue
-                chunk = Chunk(
-                    chunk_id=str(raw["chunk_id"]),
-                    content=str(raw.get("content") or ""),
-                    source_type=str(raw.get("source_type") or "chat"),
-                    source_id=str(raw.get("source_id") or ""),
-                    summary=raw.get("summary"),
-                    metadata=dict(raw.get("metadata") or {}),
-                )
-                # Bypass add() lock/dirty: load is init-only
-                if self._dim is None:
-                    self._dim = len(emb)
-                elif len(emb) != self._dim:
-                    continue
-                existing = self._index.get(chunk.chunk_id)
-                if existing is not None:
-                    self._chunks[existing] = chunk
-                    self._embeddings[existing] = emb
-                else:
-                    self._index[chunk.chunk_id] = len(self._chunks)
-                    self._chunks.append(chunk)
-                    self._embeddings.append(emb)
-                n += 1
-        except OSError:
-            return 0
-        self._dirty = False
+        with self._lock:
+            try:
+                for line in path.read_text(encoding="utf-8").splitlines():
+                    if not line.strip():
+                        continue
+                    try:
+                        rec = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    raw = rec.get("chunk") or {}
+                    emb = rec.get("embedding") or []
+                    if not raw.get("chunk_id") or not emb:
+                        continue
+                    chunk = Chunk(
+                        chunk_id=str(raw["chunk_id"]),
+                        content=str(raw.get("content") or ""),
+                        source_type=str(raw.get("source_type") or "chat"),
+                        source_id=str(raw.get("source_id") or ""),
+                        summary=raw.get("summary"),
+                        metadata=dict(raw.get("metadata") or {}),
+                    )
+                    if self._dim is None:
+                        self._dim = len(emb)
+                    elif len(emb) != self._dim:
+                        import logging
+
+                        logging.getLogger("ada.memory").warning(
+                            "skip persisted chunk %s: dim %s != %s",
+                            chunk.chunk_id,
+                            len(emb),
+                            self._dim,
+                        )
+                        continue
+                    existing = self._index.get(chunk.chunk_id)
+                    if existing is not None:
+                        self._chunks[existing] = chunk
+                        self._embeddings[existing] = emb
+                    else:
+                        self._index[chunk.chunk_id] = len(self._chunks)
+                        self._chunks.append(chunk)
+                        self._embeddings.append(emb)
+                    n += 1
+            except OSError:
+                return 0
+            self._dirty = False
         return n
 
     def __len__(self) -> int:

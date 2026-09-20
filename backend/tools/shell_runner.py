@@ -15,6 +15,7 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 
@@ -146,7 +147,26 @@ def why_command_blocked(command: str) -> str | None:
     return None
 
 
-def run_shell_command(command: str, timeout_sec: float | None = None) -> dict:
+def _kill_proc(proc: subprocess.Popen) -> None:
+    try:
+        if sys.platform == "win32":
+            proc.kill()
+        else:
+            proc.kill()
+    except Exception:
+        pass
+    try:
+        proc.wait(timeout=2)
+    except Exception:
+        pass
+
+
+def run_shell_command(
+    command: str,
+    timeout_sec: float | None = None,
+    *,
+    run_id: str | None = None,
+) -> dict:
     """
     Run one command in the configured shell under ADA_SHELL_WORKDIR.
     Returns dict: ok, returncode, stdout, stderr, error (optional), shell (mode).
@@ -178,62 +198,57 @@ def run_shell_command(command: str, timeout_sec: float | None = None) -> dict:
         _getenv("ADA_SHELL_TIMEOUT", "JARVIS_SHELL_TIMEOUT") or "120"
     )
     max_out = int(_getenv("ADA_SHELL_MAX_OUTPUT", "JARVIS_SHELL_MAX_OUTPUT") or "32000")
-    secret_keys = (
-        "OPENAI_API_KEY",
-        "XAI_API_KEY",
-        "xAI_API_KEY",
-        "HF_TOKEN",
-        "GOOGLE_OAUTH_CLIENT_SECRET",
-        "GOOGLE_OAUTH_CLIENT_ID",
-    )
-    env = {
-        k: v
-        for k, v in os.environ.items()
-        if k not in secret_keys and not k.endswith("_API_KEY") and "TOKEN" not in k
+    _KEEP = {
+        "PATH",
+        "PATHEXT",
+        "SYSTEMROOT",
+        "WINDIR",
+        "COMSPEC",
+        "TEMP",
+        "TMP",
+        "HOME",
+        "USERPROFILE",
+        "HOMEDRIVE",
+        "HOMEPATH",
+        "USERNAME",
+        "LANG",
+        "LC_ALL",
+        "TERM",
+        "NUMBER_OF_PROCESSORS",
+        "OS",
+        "SYSTEMDRIVE",
+        "PROGRAMFILES",
+        "PROGRAMDATA",
+        "LOCALAPPDATA",
+        "APPDATA",
     }
+    env = {}
+    for k, v in os.environ.items():
+        ku = k.upper()
+        if ku in _KEEP or ku.startswith("PROCESSOR_") or ku.startswith("LC_") or ku.startswith("PROGRAMFILES"):
+            env[k] = v
+
+    if mode in ("powershell", "pwsh"):
+        exe = shutil.which("pwsh" if mode == "pwsh" else "powershell") or (
+            "pwsh" if mode == "pwsh" else "powershell"
+        )
+        argv = [exe, "-NoProfile", "-NonInteractive", "-Command", command]
+    elif mode == "bash":
+        bash = shutil.which("bash") or "bash"
+        argv = [bash, "-lc", command]
+    else:
+        exe = shutil.which("sh") or "/bin/sh"
+        argv = [exe, "-c", command]
 
     try:
-        if mode in ("powershell", "pwsh"):
-            exe = shutil.which("pwsh" if mode == "pwsh" else "powershell") or (
-                "pwsh" if mode == "pwsh" else "powershell"
-            )
-            proc = subprocess.run(
-                [exe, "-NoProfile", "-NonInteractive", "-Command", command],
-                cwd=str(cwd),
-                capture_output=True,
-                text=True,
-                timeout=t,
-                env=env,
-            )
-        elif mode == "bash":
-            bash = shutil.which("bash") or "bash"
-            proc = subprocess.run(
-                [bash, "-lc", command],
-                cwd=str(cwd),
-                capture_output=True,
-                text=True,
-                timeout=t,
-                env=env,
-            )
-        else:
-            exe = shutil.which("sh") or "/bin/sh"
-            proc = subprocess.run(
-                [exe, "-c", command],
-                cwd=str(cwd),
-                capture_output=True,
-                text=True,
-                timeout=t,
-                env=env,
-            )
-    except subprocess.TimeoutExpired as e:
-        return {
-            "ok": False,
-            "returncode": -1,
-            "stdout": _clip(getattr(e, "stdout", None) or "", max_out),
-            "stderr": _clip((getattr(e, "stderr", None) or "") + "\n[timeout]", max_out),
-            "error": f"timeout after {t}s",
-            "shell": mode,
-        }
+        proc = subprocess.Popen(
+            argv,
+            cwd=str(cwd),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            env=env,
+        )
     except FileNotFoundError as e:
         return {
             "ok": False,
@@ -253,8 +268,52 @@ def run_shell_command(command: str, timeout_sec: float | None = None) -> dict:
             "shell": mode,
         }
 
-    out = _clip(proc.stdout or "", max_out)
-    err = _clip(proc.stderr or "", max_out)
+    deadline = time.monotonic() + max(1.0, float(t))
+    stdout = ""
+    stderr = ""
+    try:
+        while proc.poll() is None:
+            if run_id:
+                try:
+                    from agents.run_control import is_cancelled
+
+                    if is_cancelled(run_id):
+                        _kill_proc(proc)
+                        return {
+                            "ok": False,
+                            "returncode": -1,
+                            "stdout": "",
+                            "stderr": "",
+                            "error": "Stopped by user.",
+                            "shell": mode,
+                        }
+                except Exception:
+                    pass
+            if time.monotonic() >= deadline:
+                _kill_proc(proc)
+                return {
+                    "ok": False,
+                    "returncode": -1,
+                    "stdout": "",
+                    "stderr": "[timeout]",
+                    "error": f"timeout after {t}s",
+                    "shell": mode,
+                }
+            time.sleep(0.2)
+        stdout, stderr = proc.communicate(timeout=2)
+    except Exception as e:
+        _kill_proc(proc)
+        return {
+            "ok": False,
+            "returncode": -1,
+            "stdout": "",
+            "stderr": "",
+            "error": str(e),
+            "shell": mode,
+        }
+
+    out = _clip(stdout or "", max_out)
+    err = _clip(stderr or "", max_out)
     return {
         "ok": proc.returncode == 0,
         "returncode": proc.returncode,

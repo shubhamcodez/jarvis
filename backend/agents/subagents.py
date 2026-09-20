@@ -28,6 +28,7 @@ def run_explore(
     history = [{"role": "user", "content": f"Explore this repo for:\n{goal}\nFirst tool call now."}]
     plan: list[dict[str, Any]] = []
     summary = ""
+    files: list[str] = []
     for _ in range(max_steps):
         raw = _llm_json(api_key, provider, _EXPLORE_SYSTEM, history, max_tokens=900)
         from agents.swe_loop import _parse_tool_call, _clip
@@ -47,12 +48,21 @@ def run_explore(
                 plan=plan,
                 allow_writes=False,
             )
+        if call["tool"] == "grep":
+            for m in (result.get("matches") or [])[:20]:
+                p = str(m.get("path") or "")
+                if p and p not in files:
+                    files.append(p)
+        if call["tool"] == "read_file" and result.get("ok") and result.get("path"):
+            p = str(result.get("path"))
+            if p not in files:
+                files.append(p)
         if call["tool"] == "finish":
             summary = str((call["args"] or {}).get("summary") or "")
             break
         history.append({"role": "assistant", "content": raw[:1500]})
         history.append({"role": "user", "content": _clip(result, 4000)})
-    return {"ok": True, "summary": summary or "Explore finished without a summary."}
+    return {"ok": True, "summary": summary or "Explore finished without a summary.", "files": files[:8]}
 
 
 def run_evaluate(

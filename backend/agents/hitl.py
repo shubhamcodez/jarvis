@@ -6,10 +6,61 @@ import time
 import uuid
 from typing import Any, Callable, Optional
 
-from config import get_autonomy_level, is_desktop_armed, set_desktop_armed
+import json
+
+from config import data_root, get_autonomy_level, is_desktop_armed, set_desktop_armed
 
 _LOCK = threading.Lock()
 _PENDING: dict[str, dict[str, Any]] = {}
+_LOADED = False
+
+
+def _pending_path():
+    p = data_root() / "memory" / "pending_approvals.json"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    return p
+
+
+def _persist_pending_locked() -> None:
+    rows = []
+    for rec in _PENDING.values():
+        if rec.get("status") != "pending":
+            continue
+        rows.append({k: v for k, v in rec.items() if k != "_execute"})
+    try:
+        tmp = _pending_path().with_suffix(".tmp")
+        tmp.write_text(json.dumps(rows, ensure_ascii=False, indent=2), encoding="utf-8")
+        tmp.replace(_pending_path())
+    except OSError:
+        pass
+
+
+def _ensure_pending_loaded() -> None:
+    global _LOADED
+    if _LOADED:
+        return
+    _LOADED = True
+    path = _pending_path()
+    if not path.exists():
+        return
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return
+    if not isinstance(raw, list):
+        return
+    now = time.time()
+    for rec in raw:
+        if not isinstance(rec, dict) or not rec.get("id"):
+            continue
+        if rec.get("status") != "pending":
+            continue
+        rec = dict(rec)
+        rec["_execute"] = None
+        rec["stale"] = True
+        if now - float(rec.get("created_at") or 0) > _PENDING_TTL_SEC:
+            continue
+        _PENDING.setdefault(rec["id"], rec)
 
 HIGH_IMPACT_GOOGLE_OPS = frozenset(
     {
@@ -124,8 +175,10 @@ def enqueue_approval(
         "_execute": execute,
     }
     with _LOCK:
+        _ensure_pending_loaded()
         _prune_pending_locked()
         _PENDING[approval_id] = rec
+        _persist_pending_locked()
     public = {k: v for k, v in rec.items() if k != "_execute"}
     if chat_id:
         try:
@@ -160,6 +213,7 @@ def _prune_pending_locked() -> None:
 
 def list_pending(chat_id: Optional[str] = None) -> list[dict[str, Any]]:
     with _LOCK:
+        _ensure_pending_loaded()
         _prune_pending_locked()
         items = []
         for rec in _PENDING.values():
@@ -180,14 +234,37 @@ def resolve_approval(approval_id: str, approve: bool) -> dict[str, Any]:
         if rec.get("status") != "pending":
             return {"ok": False, "error": "already_resolved", "status": rec.get("status")}
         fn = rec.get("_execute")
+        if rec.get("stale") or not callable(fn):
+            rec["status"] = "expired"
+            _persist_pending_locked()
+            return {
+                "ok": False,
+                "error": "This approval expired after a restart. Ask Ada to retry the action.",
+                "id": approval_id,
+                "stale": True,
+            }
         if not approve:
             rec["status"] = "denied"
+            _persist_pending_locked()
             return {"ok": True, "status": "denied", "id": approval_id}
         rec["status"] = "approved"
+        _persist_pending_locked()
     result = None
     error = None
     if callable(fn):
         try:
+            from config import in_quiet_hours
+            from tools.shell_runner import why_command_blocked
+
+            kind = rec.get("kind") or ""
+            args = rec.get("args") or {}
+            if kind == "shell":
+                if in_quiet_hours():
+                    raise RuntimeError("Quiet hours are enabled; shell is paused.")
+                cmd = str(args.get("command") or "")
+                blocked = why_command_blocked(cmd) if cmd else None
+                if blocked:
+                    raise RuntimeError(f"Command blocked: {blocked}")
             result = fn()
         except Exception as e:
             error = str(e)
@@ -241,6 +318,10 @@ def maybe_gate_shell(
     blocked = deny_if_blocked("shell")
     if blocked:
         return blocked
+    from config import in_quiet_hours
+
+    if in_quiet_hours():
+        return {"ok": False, "error": "Quiet hours are enabled; shell is paused."}
     risk = classify_shell_command(command)
     if risk in ("write", "high_impact"):
         try:

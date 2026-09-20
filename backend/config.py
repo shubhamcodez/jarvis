@@ -172,8 +172,29 @@ def _load_raw_user_config() -> dict[str, Any]:
     return legacy
 
 
+_CONFIG_CACHE: dict[str, Any] | None = None
+_CONFIG_CACHE_MTIME = 0.0
+
+
+def _invalidate_config_cache() -> None:
+    global _CONFIG_CACHE, _CONFIG_CACHE_MTIME
+    _CONFIG_CACHE = None
+    _CONFIG_CACHE_MTIME = 0.0
+
+
 def _merged_config() -> dict[str, Any]:
-    return _deep_merge(copy.deepcopy(_DEFAULTS), _load_raw_user_config())
+    global _CONFIG_CACHE, _CONFIG_CACHE_MTIME
+    yml = _yaml_to_load()
+    try:
+        mtime = float(yml.stat().st_mtime) if yml is not None and yml.exists() else 0.0
+    except OSError:
+        mtime = 0.0
+    if _CONFIG_CACHE is not None and mtime == _CONFIG_CACHE_MTIME:
+        return copy.deepcopy(_CONFIG_CACHE)
+    merged = _deep_merge(copy.deepcopy(_DEFAULTS), _load_raw_user_config())
+    _CONFIG_CACHE = merged
+    _CONFIG_CACHE_MTIME = mtime
+    return copy.deepcopy(merged)
 
 
 _PROVIDERS = ("openai", "xai", "local")
@@ -265,6 +286,7 @@ def _write_merged_yaml(raw: dict[str, Any]) -> None:
             encoding="utf-8",
         )
         tmp.replace(CONFIG_YAML)
+        _invalidate_config_cache()
 
 
 def chats_config_path() -> Path:
@@ -284,6 +306,11 @@ def chats_dir() -> Path:
                 except OSError:
                     pass
                 if d.is_dir() or not d.exists():
+                    if not d.exists():
+                        try:
+                            d.mkdir(parents=True, exist_ok=True)
+                        except OSError:
+                            pass
                     return d
     return data_root() / "chats"
 
@@ -582,7 +609,7 @@ def write_api_keys(*, openai_key: str | None = None, xai_key: str | None = None)
             existing.pop("XAI_API_KEY", None)
             os.environ.pop("XAI_API_KEY", None)
             os.environ.pop("xAI_API_KEY", None)
-    lines = [ln for ln in comments if ln.startswith("#") or not ln.strip()]
+    lines = list(comments)
     for k, v in existing.items():
         if not v:
             continue

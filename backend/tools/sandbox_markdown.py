@@ -18,6 +18,10 @@ _TAG_RE = re.compile(
     r"^(?:ADA|JARVIS)_IMAGE_(PNG|JPE?G|GIF|WEBP):\s*([A-Za-z0-9+/=\s]+)\s*$",
     re.IGNORECASE,
 )
+_PREVIEW_RE = re.compile(
+    r"^(?:ADA|JARVIS)_PREVIEW_(HTML|SVG|MERMAID):\s*(.*)\s*$",
+    re.IGNORECASE,
+)
 
 # Markdown images with embedded base64 (assistant reply after stdout_to_markdown_body)
 _CHART_MD_RE = re.compile(r"!\[[^\]]*]\(data:image/[^)]+\)", re.IGNORECASE)
@@ -97,6 +101,21 @@ def stdout_to_markdown_parts(stdout: str) -> List[str]:
 
     for line in lines:
         stripped = line.strip()
+        pm = _PREVIEW_RE.match(stripped) if stripped else None
+        if pm:
+            flush_buf()
+            kind = (pm.group(1) or "HTML").lower()
+            payload = (pm.group(2) or "").strip()
+            if payload:
+                try:
+                    decoded = base64.b64decode(payload).decode("utf-8", errors="replace")
+                    if "<" in decoded:
+                        payload = decoded
+                except Exception:
+                    pass
+                fence = "svg" if kind == "svg" else "mermaid" if kind == "mermaid" else "html"
+                parts.append(f"```{fence}\n{payload}\n```")
+            continue
         m = _TAG_RE.match(stripped) if stripped else None
         if m:
             flush_buf()

@@ -4,6 +4,7 @@ from __future__ import annotations
 import unittest
 
 from agents.computer_use.budget import parse_duration, steps_for_budget
+from agents.computer_use.perception import dpi_mouse_mapping
 from agents.computer_use.chess import analyze_position
 from agents.computer_use.chess_geom import square_center_screen, square_to_frac
 from agents.computer_use.fen import (
@@ -84,6 +85,14 @@ class EngineToolTests(unittest.TestCase):
         )
         self.assertIn("White to move", out)
         self.assertIn("Suggested:", out)
+
+
+class DpiTests(unittest.TestCase):
+    def test_scaled_primary(self):
+        sx, sy, ox, oy = dpi_mouse_mapping(2560, 1440, 0, 0, 1920, 1080)
+        self.assertAlmostEqual(sx, 1920 / 2560, places=5)
+        self.assertAlmostEqual(sy, 1080 / 1440, places=5)
+        self.assertEqual((ox, oy), (0, 0))
 
 
 class VerifyTests(unittest.TestCase):

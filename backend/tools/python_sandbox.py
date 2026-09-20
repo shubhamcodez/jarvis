@@ -8,8 +8,10 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from typing import Any, Optional
 
@@ -59,25 +61,22 @@ def run_sandboxed_python(code: str, timeout_sec: float = DEFAULT_TIMEOUT_SEC) ->
     if not WORKER.is_file():
         return {"ok": False, "error": "sandbox_worker.py missing"}
 
+    scratch = tempfile.mkdtemp(prefix="ada-sandbox-")
     env = {
         "PATH": os.environ.get("PATH", ""),
         "SYSTEMROOT": os.environ.get("SYSTEMROOT", ""),
         "WINDIR": os.environ.get("WINDIR", ""),
-        "TEMP": os.environ.get("TEMP", ""),
-        "TMP": os.environ.get("TMP", ""),
-        "HOME": os.environ.get("HOME", ""),
-        "USERPROFILE": os.environ.get("USERPROFILE", ""),
+        "TEMP": scratch,
+        "TMP": scratch,
         "LANG": os.environ.get("LANG", "C"),
+        "PYTHONIOENCODING": "utf-8",
+        "PYTHONUTF8": "1",
+        "MPLBACKEND": "Agg",
+        "PYTHONNOUSERSITE": "1",
+        "ADA_SANDBOX": "1",
     }
     env = {k: v for k, v in env.items() if v}
-    env.setdefault("PYTHONIOENCODING", "utf-8")
-    env.setdefault("PYTHONUTF8", "1")
-    # Headless charts (matplotlib) in the sandbox — no GUI display required.
-    env.setdefault("MPLBACKEND", "Agg")
-    # Reduce accidental import of user site packages in worker
-    env.setdefault("PYTHONNOUSERSITE", "1")
 
-    cwd = str(WORKER.parent)
     try:
         proc = subprocess.run(
             [sys.executable, str(WORKER)],
@@ -88,12 +87,14 @@ def run_sandboxed_python(code: str, timeout_sec: float = DEFAULT_TIMEOUT_SEC) ->
             errors="replace",
             timeout=t,
             env=env,
-            cwd=cwd,
+            cwd=scratch,
         )
     except subprocess.TimeoutExpired:
         return {"ok": False, "error": f"timeout after {t}s", "stdout": "", "stderr": ""}
     except Exception as e:
         return {"ok": False, "error": f"subprocess failed: {type(e).__name__}: {e}"}
+    finally:
+        shutil.rmtree(scratch, ignore_errors=True)
 
     raw_out = (proc.stdout or "").strip()
     if not raw_out:

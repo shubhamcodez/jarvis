@@ -95,8 +95,31 @@ def execute_action(action: dict[str, Any]) -> Optional[str]:
         pyautogui.dragTo(b[0], b[1], duration=0.22, button="left")
         return f"Dragged {a} → {b}"
     if act == "type":
-        text = action.get("text") or ""
-        pyautogui.write(str(text), interval=0.02)
+        text = str(action.get("text") or "")
+        if any(ord(ch) > 127 for ch in text):
+            try:
+                import pyperclip
+
+                prev = ""
+                try:
+                    prev = pyperclip.paste()
+                except Exception:
+                    prev = ""
+                pyperclip.copy(text)
+                if sys.platform == "darwin":
+                    pyautogui.hotkey("command", "v")
+                else:
+                    pyautogui.hotkey("ctrl", "v")
+                time.sleep(0.05)
+                try:
+                    pyperclip.copy(prev)
+                except Exception:
+                    pass
+                return f"Pasted: {text[:80]}"
+            except Exception:
+                pyautogui.write(text, interval=0.02)
+                return f"Typed (fallback): {text[:80]}"
+        pyautogui.write(text, interval=0.02)
         return f"Typed: {text}"
     if act == "press":
         key = action.get("key")

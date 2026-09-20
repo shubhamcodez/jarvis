@@ -14,9 +14,9 @@ Public asks from Cursor, Claude Code, Codex, Devin, OpenHands, and OpenClaw (202
 | AGENTS.md / project rules | Devin, Claude Code, Cursor | Loaded from the workspace (`AGENTS.md`, `ADA.md`, `CLAUDE.md`) |
 | Artifact / filesystem memory | Blueprint, Claude Code compaction | `ada-artifacts/` handles for notes and localization |
 | Checkpoints / resume | Claude Code `/checkpoint`, OpenClaw overnight agents | Existing run_control checkpoints + overlay export |
-| LSP / diagnostics after edit | LangChain dcode roadmap, Devin | Syntax check after every patch; tests as the real sensor |
+| LSP / diagnostics after edit | LangChain dcode, FalkorDB, Devin | Stdio LSP after every patch (`jedi`/`pylsp`/`pyright` or bundled `ada-pylsp`) |
 | Parallel / isolated agents | Codex multi-agent, Claude subagents, Cursor `/side` | Explore (read-only) + evaluate (critic) subagents |
-| Conversation branch/merge | Claude Code `#32631` | Not first-class yet — checkpoints cover rewind |
+| Conversation branch/merge | Claude Code `#32631` | **Fork** copies history through a message into a child chat; **Merge back** appends new turns to the parent |
 | Cross-session wake on worker done | Codex FR | Existing child register/finish in the router |
 | Cost / stop / spend caps | Reddit across tools | Existing run_control spend + cancel |
 | Portable `AGENTS.md` + `.agents/skills/` | Claude Code `#6235` (3.6k 👍), `#50778` | Workspace `SKILL.md` discovery (`.agents/`, `.cursor/`, `.claude/`, `.ada/`) — catalog always, body on match |
@@ -29,8 +29,33 @@ Public asks from Cursor, Claude Code, Codex, Devin, OpenHands, and OpenClaw (202
 | Worktree cleanup hooks | Cursor forum 139624 | Overlay temps are deleted after tests |
 | Context leftover / compact control | Claude Code `#1157`, Reddit tips | `/compact`, `/recap`, history compaction in prompt_assembly |
 | Elide old tool results | arXiv 2608.26218 (28%→49% F2PF) | SWE loop already clips + compact after 20 turns |
-| LSP / code-graph for cheaper localization | FalkorDB SWE-bench harness | Cheap grep localize; full LSP still open |
-| Interactive HTML/SVG previews | OpenHands `#2691` | Not yet |
+| LSP / code-graph for cheaper localization | FalkorDB SWE-bench harness | Cheap grep localize + LSP diagnostics on edited files |
+| Interactive HTML/SVG previews | OpenHands `#2691` | Sandboxed iframe for ` ```html ` / ` ```svg ` and `ADA_PREVIEW_HTML` / `ADA_PREVIEW_SVG` |
+| `/diff` `/undo` `/commit` git loop | Aider, Claude Code commands | `/diff` (git status+diff), `/undo` (workbench or checkpoint), `/rewind` (drop last reply) |
+| `/usage` `/cost` `/stats` | Claude Code | Token totals over the last 80 traces |
+| `/init` portable AGENTS.md | Claude Code `/init`, `#6235` | Scans the linked repo and writes `AGENTS.md` if missing |
+| `/doctor` setup checkup | Claude Code | Keys present (not values), workspace, git, skills, chats dir |
+| `/review` before ship | Claude Code `/review` | Deterministic diff review + risk needles (no extra LLM) |
+| Custom slash commands | Claude Code `#4370`, `#6946` | `.agents/commands/*.md` (also `.claude/`, `.cursor/`, `.ada/`) with `$ARGUMENTS` |
+| Slash-invoke skills | Cursor `/skill`, Claude Code | `/skill name` or `/swe-fix …` expands the playbook into the next turn |
+| Git blame/log for localize | SWE-agent / Agentless | `git_history` tool (log/blame/diff/status) + recent-commit files in localize |
+| `/export` transcript | Claude Code, OpenHands Canvas | Full chat as Markdown download + clipboard |
+| `/rename` session title | Claude Code `/rename` | `/rename [name]` or auto-title from history |
+| `/copy [N]` last reply | Claude Code `/copy` | Clipboard the latest (or Nth) assistant message |
+| `/context` window fill | Claude Code `/context` | Per-role token estimate for the current chat + `/usage` |
+| `/plan` first-class | Claude Code `#30438` | Sets run mode to Plan; optional task starts a no-write turn |
+| Visible agent todos | Claude Code TodoWrite | Live strip from SWE `update_plan` |
+| HITL / run-done notify | Claude Code `#29827` | Browser notification when the tab is in the background (`/notify`) |
+| Mermaid in chat | OpenHands / Claude Code asks | Local `graph`/`flowchart` SVG preview; other types show a fallback card |
+| `/loop` in-session check-ins | Claude Code, Cursor `/loop` | `/loop 5m …` ticks via the backend scheduler; chat-only; `/loop stop` |
+| `/tasks` / `/bashes` | Claude Code | Lists durable tasks + active runs |
+| `/goal` completion condition | Claude Code `/goal`, Codex | Stored on the chat + banner; critic runs once after each turn; `/goal clear` |
+| Saved plan document | Claude Code `#30438` | SWE `update_plan` writes `ada-artifacts/PLAN.md` and persists on the chat; `/plan show` + live todo strip |
+| Slash autocomplete | Claude Code / Cursor | Composer `/` lists builtins, workspace commands, and skills |
+| Apply/Discard batch | Cursor, Claude Code `#17774` | Bar above chat applies or drops the whole proposed-edit batch |
+| Multi-ecosystem tests | SWE-bench / Aider polyglot | `run_tests` picks pytest, npm test, cargo test, or go test |
+| Overlay turn undo | Claude Code `/checkpoint` | Each applied SWE turn stores an `overlay_turn` checkpoint |
+| `/model` `/cd` `/effort` | Claude Code commands | Provider switch, relink workspace, token spend cap |
 
 ## What the benchmarks reward
 

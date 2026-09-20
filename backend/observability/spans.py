@@ -48,7 +48,12 @@ class Span:
         self.events: list[dict[str, Any]] = []
 
     def set(self, **attrs: Any) -> None:
-        self.attrs.update(attrs)
+        for k, v in attrs.items():
+            if isinstance(v, str) and len(v) > 800:
+                v = v[:799] + "…"
+            self.attrs[k] = v
+        if len(self.attrs) > 40:
+            self.attrs = dict(list(self.attrs.items())[-40:])
 
     def event(self, name: str, **attrs: Any) -> None:
         self.events.append({"name": name, "ts": time.time(), **redact_value(attrs)})

@@ -1,12 +1,14 @@
 """Post-turn memory write-back (Mem0-style: retrieve before, write after).
 
 Heuristic extraction only — no extra LLM call. Durable first-person facts and
-the current chat are upserted into the persistent store.
+new chat windows are upserted. Ingest is incremental and debounced per chat.
 """
 from __future__ import annotations
 
 import logging
 import re
+import threading
+import time
 from typing import Optional
 
 logger = logging.getLogger("ada.memory.writeback")
@@ -20,6 +22,10 @@ _FACT_HINTS = re.compile(
     r"please (?:always|never)"
     r")\b"
 )
+_DEBOUNCE_SEC = 25.0
+_LAST_INGEST: dict[str, float] = {}
+_INGEST_LOCK = threading.Lock()
+_TASKS: set = set()
 
 
 def _looks_durable(text: str) -> bool:
@@ -31,6 +37,20 @@ def _looks_durable(text: str) -> bool:
     return bool(_FACT_HINTS.search(t))
 
 
+def _should_ingest(chat_id: str, force: bool) -> bool:
+    if not chat_id:
+        return False
+    if force:
+        return True
+    now = time.time()
+    with _INGEST_LOCK:
+        last = _LAST_INGEST.get(chat_id, 0.0)
+        if now - last < _DEBOUNCE_SEC:
+            return False
+        _LAST_INGEST[chat_id] = now
+        return True
+
+
 def write_back_turn(
     *,
     chat_id: str,
@@ -38,11 +58,7 @@ def write_back_turn(
     assistant_reply: str = "",
     openai_api_key: Optional[str] = None,
 ) -> dict:
-    """
-    Persist this turn into episodic (vector) and semantic (facts) stores.
-    Safe to call from a background thread. Failures are logged, never raised.
-    """
-    out = {"facts_added": 0, "chunks_added": 0, "ok": True}
+    out = {"facts_added": 0, "chunks_added": 0, "ok": True, "ingested": False}
     msg = (user_message or "").strip()
     try:
         if _looks_durable(msg):
@@ -61,14 +77,15 @@ def write_back_turn(
         out["ok"] = False
     if not chat_id or not openai_api_key:
         return out
+    if not _should_ingest(chat_id, force=bool(out["facts_added"])):
+        return out
     try:
         from memory import get_memory_store
         from memory.ingest import ingest_chat
 
         store = get_memory_store()
-        out["chunks_added"] = ingest_chat(store, openai_api_key, chat_id)
-        if hasattr(store, "persist"):
-            store.persist()
+        out["chunks_added"] = ingest_chat(store, openai_api_key, chat_id, persist=True, only_new=True)
+        out["ingested"] = True
         try:
             from observability.metrics import incr, observe
 
@@ -88,10 +105,16 @@ def schedule_write_back(
     user_message: str,
     assistant_reply: str = "",
 ) -> None:
-    """Fire-and-forget write-back after a successful turn."""
+    """Fire-and-forget write-back. Never blocks the caller."""
     try:
-        import asyncio
+        from agents.run_control import current_run_id, is_cancelled
 
+        rid = current_run_id()
+        if rid and is_cancelled(rid):
+            return
+    except Exception:
+        pass
+    try:
         from config import get_openai_api_key
 
         try:
@@ -104,9 +127,16 @@ def schedule_write_back(
             except Exception:
                 key = None
 
-        async def _run() -> None:
-            await asyncio.to_thread(
-                write_back_turn,
+        def _run() -> None:
+            try:
+                from agents.run_control import current_run_id, is_cancelled
+
+                rid = current_run_id()
+                if rid and is_cancelled(rid):
+                    return
+            except Exception:
+                pass
+            write_back_turn(
                 chat_id=chat_id,
                 user_message=user_message,
                 assistant_reply=assistant_reply,
@@ -114,20 +144,18 @@ def schedule_write_back(
             )
 
         try:
+            import asyncio
+
             loop = asyncio.get_running_loop()
+
+            async def _ago() -> None:
+                await asyncio.to_thread(_run)
+
+            task = loop.create_task(_ago())
+            _TASKS.add(task)
+            task.add_done_callback(_TASKS.discard)
         except RuntimeError:
-            write_back_turn(
-                chat_id=chat_id,
-                user_message=user_message,
-                assistant_reply=assistant_reply,
-                openai_api_key=key,
-            )
-            return
-        task = loop.create_task(_run())
-        _TASKS.add(task)
-        task.add_done_callback(_TASKS.discard)
+            t = threading.Thread(target=_run, name="ada-writeback", daemon=True)
+            t.start()
     except Exception as exc:
         logger.debug("schedule write-back skipped: %s", exc)
-
-
-_TASKS: set = set()

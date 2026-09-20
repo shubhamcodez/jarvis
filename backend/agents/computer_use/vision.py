@@ -33,6 +33,13 @@ def _parse_json(raw: str) -> dict[str, Any]:
         out = json.loads(text)
         return out if isinstance(out, dict) else {"action": "wait", "thought": text[:400]}
     except json.JSONDecodeError:
+        for m in reversed(list(re.finditer(r"\{[^{}]*\}", text, re.S))):
+            try:
+                out = json.loads(m.group(0))
+                if isinstance(out, dict):
+                    return out
+            except json.JSONDecodeError:
+                continue
         m = re.search(r"\{.*\}", text, re.S)
         if m:
             try:
@@ -112,4 +119,19 @@ def ask_desktop_action(
     if memory_text:
         user += f"Working memory:\n{memory_text}\n"
     user += "Reply with ONLY the JSON object."
-    return ask_vision_json(api_key, provider, image_b64, system, user, max_tokens=700)
+    out = ask_vision_json(api_key, provider, image_b64, system, user, max_tokens=700)
+    act = str(out.get("action") or "wait").strip().lower()
+    out["action"] = act
+    for key in ("x", "y", "x2", "y2"):
+        if out.get(key) is None:
+            continue
+        try:
+            v = float(out[key])
+        except (TypeError, ValueError):
+            out[key] = None
+            continue
+        if key in ("x", "x2"):
+            out[key] = max(0, min(image_width - 1, v))
+        else:
+            out[key] = max(0, min(image_height - 1, v))
+    return out

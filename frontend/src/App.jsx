@@ -24,6 +24,7 @@ import {
   googleLogout,
   googleDisconnect,
   agentStepsWsUrl,
+  initApiAuth,
   runHostShellCommand,
   getUserProfile,
   saveUserProfile,
@@ -45,11 +46,17 @@ import {
   compactChat,
   getChatHandoff,
   getChatRecap,
+  forkChat,
+  mergeChat,
+  getChatMeta,
+  runSlash,
+  rewindChat,
   reactToReply,
   listBookmarks,
   addBookmark,
   deleteBookmark,
   getUsageStats,
+  getSlashCatalog,
   setRunMode,
   setSpendLimits,
   setQuietHours,
@@ -104,6 +111,8 @@ import { CodingEditSummaryCards } from './CodingEditSummaryCards'
 import { WorkspaceFileReview } from './WorkspaceFileReview'
 import { stripAdaFileFencesForDisplay } from './workspaceFileEdits'
 import { CHAT_HELP_MANUAL_MARKDOWN } from './chatHelpManual'
+import LivePreview, { isPreviewLanguage } from './LivePreview'
+import { ensureNotifyPermission, notifyAda } from './notify'
 import {
   EMPTY_USER_PROFILE,
   INTRODUCE_STEPS,
@@ -155,7 +164,7 @@ function readCodingLayoutWidths() {
 
 /** Embedded charts from the coding agent sandbox use data:image/... URLs. */
 function markdownUrlTransform(url) {
-  if (typeof url === 'string' && /^data:image\/(png|jpe?g|gif|webp);/i.test(url)) return url
+  if (typeof url === 'string' && /^data:image\/(png|jpe?g|gif|webp|svg\+xml);/i.test(url)) return url
   return defaultUrlTransform(url)
 }
 
@@ -657,7 +666,7 @@ function ChatTerminalPanel() {
     const c = cmd.trim()
     if (!c || busy) return
     setCmd('')
-    setLines((L) => [...L, { kind: 'in', text: c }])
+    setLines((L) => [...L, { kind: 'in', text: c }].slice(-400))
     setBusy(true)
     try {
       const r = await runHostShellCommand(c, 120)
@@ -665,15 +674,15 @@ function ChatTerminalPanel() {
       if (!r.ok) {
         const parts = [r.error, r.stderr].filter(Boolean)
         const msg = parts.join('\n') || `Exited with code ${r.returncode ?? -1}.`
-        setLines((L) => [...L, { kind: 'err', text: msg }])
+        setLines((L) => [...L, { kind: 'err', text: msg }].slice(-400))
       } else {
         let out = ''
         if (r.stdout) out += r.stdout
         if (r.stderr) out += (out ? '\n' : '') + r.stderr
-        setLines((L) => [...L, { kind: 'out', text: out || `(exit ${r.returncode})` }])
+        setLines((L) => [...L, { kind: 'out', text: out || `(exit ${r.returncode})` }].slice(-400))
       }
     } catch (e) {
-      setLines((L) => [...L, { kind: 'err', text: e?.message || String(e) }])
+      setLines((L) => [...L, { kind: 'err', text: e?.message || String(e) }].slice(-400))
     } finally {
       setBusy(false)
     }
@@ -772,6 +781,9 @@ function App() {
   const [panel, setPanel] = useState('chats')
   const [chats, setChats] = useState([])
   const [currentChatId, setCurrentChatIdState] = useState(null)
+  const [chatMeta, setChatMeta] = useState(null)
+  const currentChatIdRef = useRef(null)
+  const loopPollRef = useRef(null)
   const [messages, setMessages] = useState([])
   const [input, setInput] = useState('')
   const [attachments, setAttachments] = useState([])
@@ -790,6 +802,7 @@ function App() {
   const [sending, setSending] = useState(false)
   const [liveReply, setLiveReply] = useState(null)
   const [streamTimeline, setStreamTimeline] = useState([])
+  const [livePlan, setLivePlan] = useState([])
   /** Screenshots arrive on WebSocket; SSE step may arrive first or second — stash by step id */
   const screenshotPendingRef = useRef({})
   const wsRef = useRef(null)
@@ -803,6 +816,9 @@ function App() {
   const mentionUiRef = useRef(null)
   const [addMenuOpen, setAddMenuOpen] = useState(false)
   const [fileMention, setFileMention] = useState(null)
+  const [slashMention, setSlashMention] = useState(null)
+  const [slashCatalog, setSlashCatalog] = useState([])
+  const slashUiRef = useRef(null)
   const [webSearchMode, setWebSearchMode] = useState(() => {
     try {
       return sessionStorage.getItem('ada-web-search-mode') === '1'
@@ -881,6 +897,8 @@ function App() {
   const [createAgentOpen, setCreateAgentOpen] = useState(false)
   const [createAgentError, setCreateAgentError] = useState('')
   const abortRef = useRef(null)
+  const lastRunIdRef = useRef(null)
+  const activeRunsRef = useRef([])
   const sendingRef = useRef(false)
   const messageQueueRef = useRef([])
   const queueHeldRef = useRef(false)
@@ -888,6 +906,17 @@ function App() {
   useEffect(() => {
     introduceWizardRef.current = introduceWizard
   }, [introduceWizard])
+
+  useEffect(() => {
+    currentChatIdRef.current = currentChatId
+  }, [currentChatId])
+
+  useEffect(() => {
+    return () => {
+      if (loopPollRef.current) clearInterval(loopPollRef.current)
+      if (chatSearchTimerRef.current) clearTimeout(chatSearchTimerRef.current)
+    }
+  }, [])
 
   const [codingLayoutWidths, setCodingLayoutWidths] = useState(() => readCodingLayoutWidths())
 
@@ -974,6 +1003,38 @@ function App() {
   }, [fileMention])
 
   useEffect(() => {
+    slashUiRef.current = slashMention
+  }, [slashMention])
+
+  useEffect(() => {
+    let cancelled = false
+    getSlashCatalog()
+      .then((data) => {
+        if (cancelled) return
+        const rows = [
+          ...(data?.builtins || []),
+          ...(data?.commands || []),
+          ...(data?.skills || []).map((s) => ({ ...s, skill: true })),
+        ]
+        const seen = new Set()
+        const uniq = []
+        for (const row of rows) {
+          const key = String(row?.name || '').toLowerCase()
+          if (!key || seen.has(key)) continue
+          seen.add(key)
+          uniq.push(row)
+        }
+        setSlashCatalog(uniq)
+      })
+      .catch(() => {
+        if (!cancelled) setSlashCatalog([])
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  useEffect(() => {
     if (!codingModeEnabled || workspaceRelPaths.length === 0) setFileMention(null)
   }, [codingModeEnabled, workspaceRelPaths.length])
 
@@ -1022,7 +1083,20 @@ function App() {
 
   const workspaceEditMarkdownComponents = useMemo(() => {
     const files = visibleWorkspaceEditsSession?.files
-    if (!files?.length) return undefined
+    const pre = (props) => {
+      const child = Array.isArray(props.children) ? props.children[0] : props.children
+      const className = child?.props?.className || ''
+      const lang = (className.match(/language-([\w-]+)/) || [, ''])[1]
+      if (isPreviewLanguage(lang)) {
+        return (
+          <LivePreview language={lang} className={className}>
+            {markdownNodeToPlainText(child?.props?.children)}
+          </LivePreview>
+        )
+      }
+      return <pre {...props}>{props.children}</pre>
+    }
+    if (!files?.length) return { pre }
     const mk = (Tag) =>
       function WorkspaceEditHeading(props) {
         const plain = markdownNodeToPlainText(props.children)
@@ -1046,6 +1120,7 @@ function App() {
         )
       }
     return {
+      pre,
       h1: mk('h1'),
       h2: mk('h2'),
       h3: mk('h3'),
@@ -1053,8 +1128,54 @@ function App() {
     }
   }, [visibleWorkspaceEditsSession, selectWorkspaceEditFile])
 
+  const syncSlashMentionFromCaret = useCallback(
+    (value, cursorPos) => {
+      const before = String(value || '').slice(0, cursorPos ?? 0)
+      const m = before.match(/(?:^|\n)\/([a-zA-Z][\w:-]*)?$/)
+      if (!m) {
+        setSlashMention(null)
+        return
+      }
+      const query = (m[1] || '').toLowerCase()
+      const start = before.lastIndexOf('/')
+      const matches = (slashCatalog.length ? slashCatalog : [{ name: 'help', description: 'Show the chat manual' }])
+        .filter((row) => String(row.name || '').toLowerCase().startsWith(query))
+        .slice(0, 12)
+      setSlashMention((prev) => ({
+        start,
+        query,
+        matches,
+        highlight:
+          prev && prev.query === query
+            ? Math.min(prev.highlight || 0, Math.max(0, matches.length - 1))
+            : 0,
+      }))
+    },
+    [slashCatalog],
+  )
+
+  const applySlashMention = useCallback((name) => {
+    const m = slashUiRef.current
+    const el = chatInputRef.current
+    if (!m || !el || !name) return
+    const v = el.value
+    const cur = el.selectionStart ?? v.length
+    const before = v.slice(0, m.start)
+    const after = v.slice(cur)
+    const insertion = `/${name} `
+    const next = before + insertion + after
+    const caret = before.length + insertion.length
+    setInput(next)
+    setSlashMention(null)
+    setTimeout(() => {
+      el.focus()
+      el.setSelectionRange(caret, caret)
+    }, 0)
+  }, [])
+
   const syncFileMentionFromCaret = useCallback(
     (value, cursorPos, kind) => {
+      syncSlashMentionFromCaret(value, cursorPos)
       if (!codingModeEnabled || workspaceRelPaths.length === 0) {
         setFileMention(null)
         return
@@ -1088,7 +1209,7 @@ function App() {
         }
       })
     },
-    [codingModeEnabled, workspaceRelPaths],
+    [codingModeEnabled, workspaceRelPaths, syncSlashMentionFromCaret],
   )
 
   const bumpFileMentionHighlight = useCallback((delta) => {
@@ -1333,16 +1454,40 @@ function App() {
     await refreshMemoryExtras()
   }, [refreshStoragePath, refreshModelSetting, refreshGoogleAuth, refreshRuntime, refreshLocalModels, refreshControlPlane, refreshMemoryExtras])
 
+  useEffect(() => {
+    activeRunsRef.current = activeRuns
+  }, [activeRuns])
+
+  const stopEverything = useCallback(async () => {
+    abortRef.current?.abort()
+    const ids = new Set()
+    if (lastRunIdRef.current) ids.add(lastRunIdRef.current)
+    for (const r of activeRunsRef.current || []) {
+      const id = r?.run_id || r?.id
+      if (id) ids.add(id)
+    }
+    await Promise.all([...ids].map((id) => stopActiveRun(id).catch(() => {})))
+  }, [])
+
   const selectChat = useCallback(async (chatId) => {
     try {
+      await stopEverything()
       await setCurrentChat(chatId)
       setCurrentChatIdState(chatId)
       const msgs = await readChatLog(chatId)
       setMessages(msgs || [])
+      try {
+        const meta = await getChatMeta(chatId)
+        setChatMeta(meta)
+        setLivePlan(Array.isArray(meta?.plan) && meta.plan.length ? meta.plan : [])
+      } catch {
+        setChatMeta(null)
+        setLivePlan([])
+      }
     } catch (e) {
       console.error(e)
     }
-  }, [])
+  }, [stopEverything])
 
   const selectCustomAgent = useCallback(
     async (agent) => {
@@ -1394,16 +1539,24 @@ function App() {
   }, [refreshLocalModels])
 
   useEffect(() => {
-    refreshChatList()
-    refreshCustomAgents()
-    getCurrentChatId()
-      .then((id) => {
+    let cancelled = false
+    ;(async () => {
+      await initApiAuth()
+      if (cancelled) return
+      refreshChatList()
+      refreshCustomAgents()
+      try {
+        const id = await getCurrentChatId()
+        if (cancelled) return
         setCurrentChatIdState(id)
-        if (id) selectChat(id)
-      })
-      .catch(() => {
-        setCurrentChatIdState(null)
-      })
+        if (id) await selectChat(id)
+      } catch {
+        if (!cancelled) setCurrentChatIdState(null)
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
   }, [refreshChatList, refreshCustomAgents, selectChat])
 
   useEffect(() => {
@@ -1412,8 +1565,16 @@ function App() {
   }, [currentChatId, customAgents])
 
   useEffect(() => {
-    refreshControlPlane()
-    refreshMemoryExtras()
+    let cancelled = false
+    ;(async () => {
+      await initApiAuth()
+      if (cancelled) return
+      refreshControlPlane()
+      refreshMemoryExtras()
+    })()
+    return () => {
+      cancelled = true
+    }
   }, [refreshControlPlane, refreshMemoryExtras])
 
   useEffect(() => {
@@ -1806,33 +1967,55 @@ function App() {
   }, [addMenuOpen])
 
   useEffect(() => {
-    const url = agentStepsWsUrl()
-    const ws = new WebSocket(url)
-    ws.onmessage = (e) => {
-      try {
-        const p = JSON.parse(e.data)
-        if (p.screenshot == null || p.screenshot === '') return
-        const step = p.step
-        setStreamTimeline((prev) => {
-          const i = prev.findIndex((x) => x.kind === 'step' && x.step === step)
-          if (i >= 0) {
-            const next = [...prev]
-            next[i] = { ...next[i], screenshot: p.screenshot }
-            return next
+    let ws
+    let cancelled = false
+    ;(async () => {
+      await initApiAuth()
+      if (cancelled) return
+      const url = agentStepsWsUrl()
+      ws = new WebSocket(url)
+      const bind = (socket) => {
+        socket.onmessage = (e) => {
+          try {
+            const p = JSON.parse(e.data)
+            if (p.screenshot == null || p.screenshot === '') return
+            if (p.chat_id && currentChatIdRef.current && p.chat_id !== currentChatIdRef.current) return
+            if (p.run_id && lastRunIdRef.current && p.run_id !== lastRunIdRef.current) return
+            const step = p.step
+            setStreamTimeline((prev) => {
+              const i = prev.findIndex((x) => x.kind === 'step' && x.step === step)
+              if (i >= 0) {
+                const next = [...prev]
+                next[i] = { ...next[i], screenshot: p.screenshot }
+                return next
+              }
+              screenshotPendingRef.current[step] = p.screenshot
+              return prev
+            })
+          } catch {
+            /* ignore */
           }
-          screenshotPendingRef.current[step] = p.screenshot
-          return prev
-        })
-      } catch {
-        /* ignore */
+        }
+        socket.onclose = () => {
+          if (cancelled) return
+          setTimeout(() => {
+            if (cancelled) return
+            try {
+              const next = new WebSocket(url)
+              bind(next)
+              wsRef.current = next
+            } catch {
+              /* ignore */
+            }
+          }, 1500)
+        }
       }
-    }
-    ws.onclose = () => {
-      /* ignore */
-    }
-    wsRef.current = ws
+      bind(ws)
+      wsRef.current = ws
+    })()
     return () => {
-      ws.close()
+      cancelled = true
+      if (ws) ws.close()
       wsRef.current = null
     }
   }, [])
@@ -1894,11 +2077,17 @@ function App() {
   }
 
   const appendMessage = (text, isUser) => {
-    setMessages((prev) => [...prev, { role: isUser ? 'user' : 'assistant', content: text }])
+    setMessages((prev) => [
+      ...prev,
+      { id: `${Date.now()}-${prev.length}`, role: isUser ? 'user' : 'assistant', content: text },
+    ])
   }
 
   const appendToolMessage = (toolUsed) => {
-    setMessages((prev) => [...prev, { role: 'tool', content: JSON.stringify(toolUsed) }])
+    setMessages((prev) => [
+      ...prev,
+      { id: `${Date.now()}-tool-${prev.length}`, role: 'tool', content: JSON.stringify(toolUsed) },
+    ])
   }
 
   const toggleWebSearchMode = () => {
@@ -2212,7 +2401,7 @@ function App() {
     }
     if (/^\/stop\s*$/i.test(raw) && filesToSend.length === 0) {
       setInput('')
-      abortRef.current?.abort()
+      await stopEverything()
       return
     }
     if (/^\/compact\s*$/i.test(raw) && filesToSend.length === 0) {
@@ -2302,6 +2491,123 @@ function App() {
       refreshChatList()
       return
     }
+    const slashLocal = raw.match(/^\/([a-zA-Z][\w:-]*)(?:\s+([\s\S]*))?$/)
+    const slashReserved = /^(help|stop|compact|handoff|recap|btw|side|search-memory|introduce)$/i
+    if (slashLocal && !slashReserved.test(slashLocal[1]) && filesToSend.length === 0 && !opts.skipSlash) {
+      const cmd = slashLocal[1]
+      const rest = (slashLocal[2] || '').trim()
+      if (/^undo$/i.test(cmd) && workspaceLocalLabel.trim()) {
+        const peek = await peekWorkspaceUndo(workspaceLocalLabel.trim())
+        if (peek?.deltas?.length) {
+          setInput('')
+          setFileMention(null)
+          appendMessage(raw, true)
+          try {
+            await appendChatLog('user', raw)
+          } catch {
+            /* ignore */
+          }
+          await applyWorkspaceUndo()
+          const body = `Undid the last workbench edit (${peek.deltas.map((d) => d.relPath).join(', ')}).`
+          appendMessage(body, false)
+          try {
+            await appendChatLog('assistant', body)
+          } catch {
+            /* ignore */
+          }
+          refreshChatList()
+          return
+        }
+      }
+      try {
+        const cid = currentChatId || (await getCurrentChatId())
+        const data = await runSlash(cmd, rest, cid)
+        setInput('')
+        setFileMention(null)
+        if (data?.set_mode) {
+          try {
+            await setRunMode(data.set_mode)
+            setRunModeState(data.set_mode)
+          } catch {
+            /* ignore */
+          }
+        }
+        if (data?.kind === 'notify') {
+          const perm = await ensureNotifyPermission()
+          notifyAda('Ada', perm === 'granted' ? 'Notifications are on.' : 'Notifications were blocked.')
+        }
+        if (data?.set_provider) {
+          try {
+            await refreshModelSetting()
+          } catch {
+            /* ignore */
+          }
+        }
+        if (/^(loop|proactive)$/i.test(cmd) && /^(stop|clear|off)$/i.test(rest) && loopPollRef.current) {
+          clearInterval(loopPollRef.current)
+          loopPollRef.current = null
+        }
+        if (data?.kind === 'loop') {
+          if (loopPollRef.current) clearInterval(loopPollRef.current)
+          loopPollRef.current = setInterval(async () => {
+            const cid = currentChatIdRef.current
+            if (!cid) return
+            try {
+              const msgs = await readChatLog(cid)
+              setMessages(msgs || [])
+            } catch {
+              /* ignore */
+            }
+          }, 12000)
+        }
+        if ((data?.kind === 'export' || data?.kind === 'copy') && data.text) {
+          try {
+            await navigator.clipboard.writeText(data.text)
+          } catch {
+            /* ignore */
+          }
+        }
+        if (data?.kind === 'export' && data.text) {
+          const blob = new Blob([data.text], { type: 'text/markdown;charset=utf-8' })
+          const url = URL.createObjectURL(blob)
+          const a = document.createElement('a')
+          a.href = url
+          a.download = data.filename || 'ada-chat.md'
+          a.click()
+          URL.revokeObjectURL(url)
+        }
+        if (data?.kind === 'prompt' && data.prompt) {
+          await handleSend({ text: data.prompt, skipSlash: true })
+          return
+        }
+        appendMessage(raw, true)
+        try {
+          await appendChatLog('user', raw)
+        } catch {
+          /* ignore */
+        }
+        const body = data?.markdown || data?.error || 'Done.'
+        appendMessage(body, false)
+        try {
+          await appendChatLog('assistant', body)
+        } catch {
+          /* ignore */
+        }
+        if (data?.reload && cid) {
+          await selectChat(cid)
+        }
+        refreshChatList()
+        return
+      } catch (e) {
+        if (!/unknown command/i.test(e?.message || '')) {
+          setInput('')
+          appendMessage(raw, true)
+          appendMessage(e?.message || 'Command failed.', false)
+          refreshChatList()
+          return
+        }
+      }
+    }
     if (/^\/search-memory\s+/i.test(raw) && filesToSend.length === 0) {
       const q = raw.replace(/^\/search-memory\s+/i, '').trim()
       setInput('')
@@ -2384,9 +2690,11 @@ function App() {
     setSending(true)
     const ac = new AbortController()
     abortRef.current = ac
+    lastRunIdRef.current = null
     setLiveReply('')
     streamAdaStripRef.current = ''
     setStreamTimeline([])
+    setLivePlan([])
     screenshotPendingRef.current = {}
 
     try {
@@ -2395,8 +2703,8 @@ function App() {
       /* ignore */
     }
 
+    let chatId = currentChatId
     try {
-      let chatId = currentChatId
       if (!chatId) {
         chatId = (await getCurrentChatId()) || null
         setCurrentChatIdState(chatId)
@@ -2411,6 +2719,7 @@ function App() {
           projectContextActive,
           projectContextActive ? cSnap || null : null,
           activeAgentId || null,
+          ac.signal,
         )
         appendMessage(reply, false)
         await appendChatLog('assistant', reply, chatId)
@@ -2454,6 +2763,9 @@ function App() {
               : 'Please summarize or answer based on the attached documents.')
         const streamResult = await sendMessageStream(streamMsg, null, chatId, {
             signal: ac.signal,
+            onRun: (id) => {
+              lastRunIdRef.current = id
+            },
             webSearchQuery: extraWs.trim() || null,
             codingMode: projectContextActive,
             codingProjectSnapshot: projectContextActive ? cSnap || null : null,
@@ -2467,7 +2779,7 @@ function App() {
             onStatus: (d) => {
               if (d.phase === 'done') return
               setStreamTimeline((prev) => [
-                ...prev,
+                ...prev.slice(-79),
                 {
                   kind: 'status',
                   phase: d.phase,
@@ -2481,28 +2793,49 @@ function App() {
               ])
             },
             onAgentStep: (d) => {
+              if (d.action === 'update_plan') {
+                let parsed = d.result
+                if (typeof parsed === 'string') {
+                  try {
+                    parsed = JSON.parse(parsed)
+                  } catch {
+                    parsed = null
+                  }
+                }
+                if (Array.isArray(parsed?.plan)) setLivePlan(parsed.plan)
+              }
               const row = formatAgentStep(d)
               const pending = screenshotPendingRef.current[d.step]
               if (pending != null) {
                 delete screenshotPendingRef.current[d.step]
               }
               const screenshot = d.screenshot || pending || row.screenshot || null
-              setStreamTimeline((prev) => [...prev, { ...row, screenshot }])
+              setStreamTimeline((prev) => [...prev.slice(-79), { ...row, screenshot }])
             },
         })
         reply = streamResult?.reply ?? streamResult ?? ''
+        if (streamResult?.run_id) lastRunIdRef.current = streamResult.run_id
         if (streamResult?.tool_used) appendToolMessage(streamResult.tool_used)
         if (streamResult?.file_edits?.length) {
           setPendingWorkspaceEdits({ id: Date.now(), files: streamResult.file_edits })
         }
         if (streamResult?.pending_approvals?.length) {
           setPendingApprovals(streamResult.pending_approvals)
+          notifyAda('Ada needs approval', streamResult.pending_approvals[0]?.summary || 'A write is waiting.')
         } else {
           refreshPendingApprovals()
+          notifyAda('Ada finished', String(streamResult?.reply || reply || 'Done.').split('\n')[0])
         }
         appendMessage(reply || '', false)
         await appendChatLog('assistant', reply || '', chatId)
         refreshControlPlane()
+        try {
+          const meta = await getChatMeta(chatId)
+          setChatMeta(meta)
+          if (Array.isArray(meta?.plan) && meta.plan.length) setLivePlan(meta.plan)
+        } catch {
+          /* ignore */
+        }
       }
       setLiveReply(null)
       setStreamTimeline([])
@@ -2516,7 +2849,7 @@ function App() {
         : err?.message || 'Sorry, something went wrong. Please try again.'
       appendMessage(msg, false)
       try {
-        await appendChatLog('assistant', msg, currentChatId)
+        await appendChatLog('assistant', msg, chatId || currentChatId)
       } catch {
         /* ignore */
       }
@@ -2535,7 +2868,56 @@ function App() {
     }
   }
 
+  const applyAllPendingEdits = useCallback(async () => {
+    const files = visibleWorkspaceEditsSession?.files || []
+    for (const f of files) {
+      const r = await saveProjectFile(f.path, f.content)
+      if (!r?.ok) {
+        alert(r?.error || `Could not apply ${f.path}`)
+        return
+      }
+    }
+    setPendingWorkspaceEdits(null)
+    setWorkspaceReviewHiddenPaths(new Set())
+  }, [visibleWorkspaceEditsSession, saveProjectFile])
+
+  const discardAllPendingEdits = useCallback(() => {
+    setPendingWorkspaceEdits(null)
+    setWorkspaceReviewHiddenPaths(new Set())
+  }, [])
+
   const handleKeyDown = (e) => {
+    const su = slashUiRef.current
+    if (su && su.matches.length > 0) {
+      if (e.key === 'ArrowDown') {
+        e.preventDefault()
+        setSlashMention((sm) => {
+          if (!sm?.matches?.length) return sm
+          return { ...sm, highlight: (sm.highlight + 1) % sm.matches.length }
+        })
+        return
+      }
+      if (e.key === 'ArrowUp') {
+        e.preventDefault()
+        setSlashMention((sm) => {
+          if (!sm?.matches?.length) return sm
+          const n = sm.matches.length
+          return { ...sm, highlight: (sm.highlight + n - 1) % n }
+        })
+        return
+      }
+      if (e.key === 'Enter' || e.key === 'Tab') {
+        e.preventDefault()
+        const hit = su.matches[su.highlight]
+        if (hit?.name) applySlashMention(hit.name)
+        return
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        setSlashMention(null)
+        return
+      }
+    }
     const mu = mentionUiRef.current
     if (mu && mu.matches.length > 0) {
       if (e.key === 'ArrowDown') {
@@ -2589,8 +2971,100 @@ function App() {
     }
   }
 
+  const handleForkFrom = async (messageIndex) => {
+    if (!currentChatId) return
+    try {
+      const data = await forkChat(currentChatId, messageIndex)
+      if (data?.id) {
+        await refreshChatList()
+        await selectChat(data.id)
+      }
+    } catch (e) {
+      alert(e?.message || 'Fork failed.')
+    }
+  }
+
+  const handleMergeBranch = async () => {
+    if (!currentChatId || !chatMeta?.parent_id) return
+    if (!confirm('Merge this branch’s new messages into the parent chat?')) return
+    try {
+      const data = await mergeChat(currentChatId)
+      if (data?.target_id) {
+        await refreshChatList()
+        await selectChat(data.target_id)
+      }
+    } catch (e) {
+      alert(e?.message || 'Merge failed.')
+    }
+  }
+
+  const displayMessages = messages.length > 200 ? messages.slice(-200) : messages
+  const displayOffset = messages.length > 200 ? messages.length - 200 : 0
+
   const chatMainInner = (
     <>
+      {chatMeta?.goal_condition ? (
+        <div className="agent-chat-banner">
+          <span className="agent-chat-banner__id">
+            <strong>Goal</strong>
+            <span className="agent-chat-banner__title">{chatMeta.goal_condition}</span>
+          </span>
+          <button
+            type="button"
+            className="agent-chat-banner__btn"
+            onClick={async () => {
+              try {
+                await runSlash('goal', 'clear', currentChatId)
+                if (currentChatId) await selectChat(currentChatId)
+              } catch {
+                /* ignore */
+              }
+            }}
+          >
+            Clear
+          </button>
+        </div>
+      ) : null}
+      {livePlan.length ? (
+        <ol className="swe-todo-strip" aria-label="Agent plan">
+          {livePlan.map((item) => (
+            <li key={item.id || item.text} className={`swe-todo-strip__item is-${item.status || 'pending'}`}>
+              <span className="swe-todo-strip__mark" aria-hidden>
+                {item.status === 'done' ? '✓' : item.status === 'active' ? '▸' : '○'}
+              </span>
+              <span>{item.text || item.id}</span>
+            </li>
+          ))}
+        </ol>
+      ) : null}
+      {visibleWorkspaceEditsSession?.files?.length ? (
+        <div className="workspace-apply-bar" role="region" aria-label="Proposed file changes">
+          <span className="workspace-apply-bar__label">
+            {visibleWorkspaceEditsSession.files.length} file
+            {visibleWorkspaceEditsSession.files.length === 1 ? '' : 's'} ready to apply
+          </span>
+          <button type="button" className="workspace-apply-bar__btn" onClick={applyAllPendingEdits}>
+            Apply all
+          </button>
+          <button type="button" className="workspace-apply-bar__btn workspace-apply-bar__btn--ghost" onClick={discardAllPendingEdits}>
+            Discard
+          </button>
+        </div>
+      ) : null}
+      {chatMeta?.parent_id ? (
+        <div className="agent-chat-banner">
+          <span className="agent-chat-banner__id">
+            <strong>{chatMeta.branch_label || 'Branch'}</strong>
+            <span className="agent-chat-banner__title">forked conversation</span>
+          </span>
+          <button type="button" className="agent-chat-banner__btn" onClick={() => selectChat(chatMeta.parent_id)}>
+            Parent
+          </button>
+          <button type="button" className="agent-chat-banner__btn" onClick={handleMergeBranch}>
+            Merge back
+          </button>
+        </div>
+      ) : null}
       {activeAgent ? (
         <div className="agent-chat-banner">
           <span className="agent-chat-banner__id">
@@ -2608,10 +3082,22 @@ function App() {
         </div>
       ) : null}
       <div className="chat-messages">
-        {messages.map((msg, i) => (
-          <div key={i} className={`msg ${msg.role === 'user' ? 'msg-user' : msg.role === 'tool' ? 'msg-tool' : 'msg-bot'}`}>
+        {displayMessages.map((msg, i) => (
+          <div key={msg.id || `${msg.role}-${i}-${(msg.content || '').slice(0, 24)}`} className={`msg ${msg.role === 'user' ? 'msg-user' : msg.role === 'tool' ? 'msg-tool' : 'msg-bot'}`}>
             {msg.role === 'user' ? (
-              <span className="msg-text">{msg.content}</span>
+              <div className="msg-user-body">
+                <span className="msg-text">{msg.content}</span>
+                {currentChatId ? (
+                  <button
+                    type="button"
+                    className="msg-pin-btn"
+                    title="Fork a new chat from this message"
+                    onClick={() => handleForkFrom(displayOffset + i)}
+                  >
+                    Fork
+                  </button>
+                ) : null}
+              </div>
             ) : msg.role === 'tool' ? (
               <ToolMessageCard content={msg.content} />
             ) : (
@@ -2655,6 +3141,34 @@ function App() {
                   >
                     👎
                   </button>
+                  <button
+                    type="button"
+                    className="msg-pin-btn"
+                    title="Fork a new chat from this reply"
+                    onClick={() => handleForkFrom(displayOffset + i)}
+                  >
+                    Fork
+                  </button>
+                  {displayOffset + i === messages.length - 1 ? (
+                    <button
+                      type="button"
+                      className="msg-pin-btn"
+                      title="Rewind: drop this reply (Claude /rewind)"
+                      onClick={async () => {
+                        if (!currentChatId) return
+                        if (!confirm('Drop the last assistant reply from this chat?')) return
+                        try {
+                          await rewindChat(currentChatId)
+                          await selectChat(currentChatId)
+                          await refreshChatList()
+                        } catch (e) {
+                          alert(e?.message || 'Rewind failed.')
+                        }
+                      }}
+                    >
+                      Rewind
+                    </button>
+                  ) : null}
                   <button
                     type="button"
                     className="msg-pin-btn"
@@ -2897,6 +3411,28 @@ function App() {
           </div>
           <input type="file" ref={fileInputRef} style={{ display: 'none' }} multiple onChange={onFileChange} />
           <div className="chat-input-composer">
+            {slashMention?.matches?.length ? (
+              <div id="chat-slash-mention-list" className="chat-file-mention" role="listbox" aria-label="Slash commands">
+                {slashMention.matches.map((row, i) => (
+                  <button
+                    key={row.name}
+                    type="button"
+                    role="option"
+                    id={`chat-slash-mention-${i}`}
+                    aria-selected={i === slashMention.highlight}
+                    className={`chat-file-mention-item${i === slashMention.highlight ? ' chat-file-mention-item--active' : ''}`}
+                    onMouseEnter={() => setSlashMention((sm) => (sm ? { ...sm, highlight: i } : null))}
+                    onMouseDown={(ev) => {
+                      ev.preventDefault()
+                      applySlashMention(row.name)
+                    }}
+                  >
+                    <span className="chat-file-mention-path">/{row.name}</span>
+                    <span className="chat-slash-mention-hint">{row.description || row.argument_hint || ''}</span>
+                  </button>
+                ))}
+              </div>
+            ) : null}
             {fileMention && codingModeEnabled && workspaceRelPaths.length > 0 ? (
               <div
                 id="chat-file-mention-list"
@@ -2985,10 +3521,17 @@ function App() {
               }}
               onKeyDown={handleKeyDown}
               autoComplete="off"
-              aria-autocomplete={fileMention ? 'list' : undefined}
-              aria-controls={fileMention ? 'chat-file-mention-list' : undefined}
+              aria-autocomplete={fileMention || slashMention ? 'list' : undefined}
+              aria-controls={
+                slashMention
+                  ? 'chat-slash-mention-list'
+                  : fileMention
+                    ? 'chat-file-mention-list'
+                    : undefined
+              }
               aria-expanded={Boolean(
-                fileMention && codingModeEnabled && workspaceRelPaths.length > 0,
+                slashMention?.matches?.length ||
+                  (fileMention && codingModeEnabled && workspaceRelPaths.length > 0),
               )}
             />
           </div>
@@ -2997,7 +3540,9 @@ function App() {
               type="button"
               id="chat-stop"
               className="chat-stop-btn"
-              onClick={() => abortRef.current?.abort()}
+              onClick={() => {
+                stopEverything().catch(() => {})
+              }}
             >
               Stop
             </button>
@@ -3026,6 +3571,7 @@ function App() {
             aria-label="New chat"
             onClick={async () => {
               try {
+                await stopEverything()
                 setAgentEditorId(null)
                 const chatId = await createNewChat()
                 setCurrentChatIdState(chatId)
@@ -3119,7 +3665,7 @@ function App() {
                         >
                           {CHAT_ICON}
                           <span className="chat-history-title" title={chat.title}>
-                            {chat.title}
+                            {chat.parent_id ? `↳ ${chat.title}` : chat.title}
                           </span>
                         </button>
                         <button
