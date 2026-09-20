@@ -1,5 +1,5 @@
-# PyInstaller spec for the Ada FastAPI sidecar (Windows).
-# Run from backend/: poetry run pyinstaller ada-backend.spec
+# PyInstaller spec for the Jarvis FastAPI sidecar (Windows).
+# Run from backend/: poetry run pyinstaller jarvis-backend.spec
 from pathlib import Path
 
 from PyInstaller.utils.hooks import collect_data_files, collect_submodules
@@ -8,7 +8,7 @@ block_cipher = None
 here = Path(SPECPATH)
 
 datas = []
-for name in ("ada-config.yaml",):
+for name in ("jarvis-config.yaml",):
     p = here / name
     if p.exists():
         datas.append((str(p), "."))
@@ -64,7 +64,7 @@ exe = EXE(
     a.zipfiles,
     a.datas,
     [],
-    name="ada-backend",
+    name="jarvis-backend",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

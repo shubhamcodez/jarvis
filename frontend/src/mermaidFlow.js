@@ -63,7 +63,7 @@ function mermaidUnsupportedSvg(src) {
   const kind = first.trim().split(/\s+/)[0] || 'diagram'
   const hint = /^(graph|flowchart)\b/i.test(first)
     ? 'Could not parse this flowchart.'
-    : `${kind} diagrams are not rendered locally. Ada previews graph/flowchart fences.`
+    : `${kind} diagrams are not rendered locally. Jarvis previews graph/flowchart fences.`
   const w = 420
   const h = 88
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}"><rect width="${w}" height="${h}" fill="#f7f7f4" stroke="#bbb"/><text x="16" y="36" font-size="13" font-family="sans-serif" fill="#333">${escapeXml(hint)}</text><text x="16" y="60" font-size="11" font-family="sans-serif" fill="#666">${escapeXml(first.slice(0, 64))}</text></svg>`

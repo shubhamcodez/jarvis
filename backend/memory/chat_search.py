@@ -115,7 +115,7 @@ def recap_markdown(chat_id: str, extra: str = "") -> str:
 def handoff_markdown(chat_id: str, extra: str = "") -> str:
     msgs = read_chat_log(chat_id)
     lines = [
-        "# Ada session handoff",
+        "# Jarvis session handoff",
         "",
         "Paste this into a new chat (or another tool) so you do not re-explain the thread.",
         "",

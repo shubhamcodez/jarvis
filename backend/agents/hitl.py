@@ -239,7 +239,7 @@ def resolve_approval(approval_id: str, approve: bool) -> dict[str, Any]:
             _persist_pending_locked()
             return {
                 "ok": False,
-                "error": "This approval expired after a restart. Ask Ada to retry the action.",
+                "error": "This approval expired after a restart. Ask Jarvis to retry the action.",
                 "id": approval_id,
                 "stale": True,
             }
@@ -301,7 +301,7 @@ def maybe_gate_google(
         "ok": False,
         "pending_approval": True,
         "approval_id": pending["id"],
-        "error": "Awaiting user confirmation in the Ada window.",
+        "error": "Awaiting user confirmation in the Jarvis window.",
         "op": op,
     }
 

@@ -7,7 +7,7 @@ from typing import Any, Optional
 
 from agents.models import get_llm_client
 
-_ACTION_SYSTEM = """You are Ada's computer-use controller. You see a screenshot and pick ONE next action.
+_ACTION_SYSTEM = """You are Jarvis's computer-use controller. You see a screenshot and pick ONE next action.
 
 You operate in an observe → ground → act → verify loop:
 - Ground: name the exact on-screen target (button label, icon, square) before clicking.

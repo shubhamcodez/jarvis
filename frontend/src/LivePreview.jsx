@@ -11,7 +11,7 @@ function srcDocFor(lang, source) {
   const l = (lang || '').toLowerCase()
   if (l === 'mermaid') {
     const svg = mermaidFlowSvg(body)
-    const inner = svg || `<pre style="padding:12px;font:13px/1.4 sans-serif">Could not render this diagram. Ada previews graph/flowchart fences locally.\n\n${body.replace(/</g, '&lt;')}</pre>`
+    const inner = svg || `<pre style="padding:12px;font:13px/1.4 sans-serif">Could not render this diagram. Jarvis previews graph/flowchart fences locally.\n\n${body.replace(/</g, '&lt;')}</pre>`
     return `<!doctype html><html><head><meta charset="utf-8"><style>html,body{margin:0;background:#fff}</style></head><body>${inner}</body></html>`
   }
   if (l === 'svg' || body.trim().startsWith('<svg')) {

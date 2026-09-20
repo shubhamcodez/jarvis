@@ -1,4 +1,4 @@
-# Ada Agent Workflow
+# Jarvis Agent Workflow
 
 End-to-end flow from user message to reply: routing, supervisor, desktop/coding/shell/**finance** agents, **memory** (planned), and **self-improving evals**.
 
@@ -10,7 +10,7 @@ End-to-end flow from user message to reply: routing, supervisor, desktop/coding/
 - **POST `/chat/send-message/stream`** (streaming): SSE stream; used by the frontend. Can stream chat tokens **or** run the agent and send one final event with the full reply.
 - **POST `/chat/response`**: chat-only, no routing (direct LLM reply).
 
-The **provider** (OpenAI or xAI) and **API key** come from `get_llm_provider()` and `get_llm_api_key()` (Settings updates `backend/ada-config.yaml`; keys stay in `.env`).
+The **provider** (OpenAI or xAI) and **API key** come from `get_llm_provider()` and `get_llm_api_key()` (Settings updates `backend/jarvis-config.yaml`; keys stay in `.env`).
 
 ---
 
@@ -161,7 +161,7 @@ Again, **on_step** is the same callback; the backend sends these steps over the 
 
 - After the graph finishes (both stream and non-stream), the backend calls **trace_log(provider, route, message, reply, success, error, duration_sec, …)**.  
 - **route** is the state’s **route** set by the node that ran (chat, run_desktop, run_coding, run_shell, run_finance), or **feedback_assess** when the user sends a short “this reply was bad” message (see §9).  
-- Traces are appended to **ada-observability/traces/trace.jsonl** (or legacy **jarvis-observability** if that folder exists alone) and used later for optional eval generation and optimization (per-model success rates, tokens, errors).
+- Traces are appended to **jarvis-observability/traces/trace.jsonl** (or legacy **jarvis-observability** if that folder exists alone) and used later for optional eval generation and optimization (per-model success rates, tokens, errors).
 
 ---
 
@@ -172,7 +172,7 @@ Again, **on_step** is the same callback; the backend sends these steps over the 
 **Batch evals from traces (optional)** — The agent can also improve using **traces** and **batch eval results**:
 
 1. **Trace** — Every chat/agent run is logged (see §8).  
-2. **Generate evals** — POST `/observability/evals/generate`: an LLM turns recent traces into multi-turn eval cases; stored in `ada-observability/evals/eval_cases.jsonl` (same legacy-folder rule as traces). Background generation from traces is **off by default**; set `ADA_AUTO_EVAL_GEN=1` to re-enable on a cooldown.  
+2. **Generate evals** — POST `/observability/evals/generate`: an LLM turns recent traces into multi-turn eval cases; stored in `jarvis-observability/evals/eval_cases.jsonl` (same legacy-folder rule as traces). Background generation from traces is **off by default**; set `ADA_AUTO_EVAL_GEN=1` to re-enable on a cooldown.  
 3. **Run evals** — POST `/observability/evals/run`: each case is run with **both** OpenAI and xAI; optional LLM judge scores replies; results in `eval_runs.jsonl`, pass@1 per model.  
 4. **Optimization** — POST `/observability/optimization/run`: aggregates trace stats + eval pass rates, then calls an LLM to produce:
    - **prompt_modification_instructions** (target: supervisor | desktop | coding | shell | finance | chat; what to add/change and why),

@@ -1,5 +1,5 @@
 """
-Minimal stdio LSP for Ada: initialize → didOpen → textDocument/publishDiagnostics.
+Minimal stdio LSP for Jarvis: initialize → didOpen → textDocument/publishDiagnostics.
 
 Uses the ast module (no extra deps). Reports syntax errors and undefined names.
 """
@@ -67,7 +67,7 @@ def analyze_python(source: str) -> list[dict]:
                     "end": {"line": line, "character": col + 1},
                 },
                 "severity": 1,
-                "source": "ada-pylsp",
+                "source": "jarvis-pylsp",
                 "message": e.msg or "SyntaxError",
             }
         )
@@ -127,7 +127,7 @@ def analyze_python(source: str) -> list[dict]:
                             },
                         },
                         "severity": 1,
-                        "source": "ada-pylsp",
+                        "source": "jarvis-pylsp",
                         "message": f"Undefined name '{node.id}'",
                     }
                 )
@@ -165,7 +165,7 @@ def serve() -> None:
                     "capabilities": {
                         "textDocumentSync": 1,
                     },
-                    "serverInfo": {"name": "ada-pylsp", "version": "1"},
+                    "serverInfo": {"name": "jarvis-pylsp", "version": "1"},
                 },
             )
         elif method == "initialized":

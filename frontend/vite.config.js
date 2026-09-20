@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url'
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
 function adaTokenPath() {
-  return path.resolve(__dirname, '..', '.secrets', 'ada-api-token')
+  return path.resolve(__dirname, '..', '.secrets', 'jarvis-api-token')
 }
 
 function ensureAdaToken() {
@@ -29,7 +29,7 @@ function ensureAdaToken() {
 
 function injectAdaToken(proxyReq) {
   const t = ensureAdaToken()
-  if (t) proxyReq.setHeader('X-Ada-Token', t)
+  if (t) proxyReq.setHeader('X-Jarvis-Token', t)
 }
 
 // https://vite.dev/config/

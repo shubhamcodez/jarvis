@@ -95,7 +95,7 @@ from tools.python_sandbox import run_sandboxed_python
 from tools.sandbox_markdown import redact_sandbox_result_dict
 from tools.file_grep import grep_files
 from tools.shell_runner import is_shell_enabled, run_shell_command
-from tools.workspace_file_edits import extract_ada_file_edits
+from tools.workspace_file_edits import extract_workspace_file_edits
 from auth.google_oauth import (
     callback_error_redirect,
     callback_success_redirect,
@@ -220,7 +220,7 @@ _CORS_ORIGINS = (
 _AUTH_PUBLIC_PATHS = frozenset({"/health", "/auth/google/callback"})
 
 app = FastAPI(
-    title="Ada API",
+    title="Jarvis API",
     lifespan=_lifespan,
     docs_url=None if is_packaged() else "/docs",
     redoc_url=None if is_packaged() else "/redoc",
@@ -261,7 +261,7 @@ async def _require_local_api_token(request: Request, call_next):
 _ws_connections: list[WebSocket] = []
 _ws_lock = asyncio.Lock()
 _SENTINEL = object()
-_UPLOAD_ROOT = Path(__import__("tempfile").gettempdir()) / "ada-uploads"
+_UPLOAD_ROOT = Path(__import__("tempfile").gettempdir()) / "jarvis-uploads"
 
 
 def _jail_attachment_paths(paths: Optional[list[str]]) -> list[str]:
@@ -317,7 +317,7 @@ def _sse_data(obj: dict) -> str:
 
 def _strip_workspace_edits_from_reply(reply: str) -> tuple[str, list | None]:
     """Remove ```ada-file:...``` blocks from visible reply; return pending edits for UI."""
-    clean, edits = extract_ada_file_edits(reply or "")
+    clean, edits = extract_workspace_file_edits(reply or "")
     return clean, edits if edits else None
 
 
@@ -2522,7 +2522,7 @@ async def api_tools_grep(
     q: str = Query(..., description="Search pattern (literal by default; set regex=1 for regex)"),
     root: Optional[str] = Query(
         None,
-        description="Directory to search (defaults to grep.default_root in ada-config.yaml or ada-grep-root.txt)",
+        description="Directory to search (defaults to grep.default_root in jarvis-config.yaml or jarvis-grep-root.txt)",
     ),
     limit: int = Query(100, ge=1, le=5000),
     regex: bool = Query(False, description="If true, pattern is a regex (ripgrep / Python re)"),
@@ -2567,7 +2567,7 @@ async def api_tools_grep(
         if gr is None:
             return {
                 "ok": False,
-                "error": "No search root: pass root= or set grep.default_root in ada-config.yaml or create ada-grep-root.txt with a directory path.",
+                "error": "No search root: pass root= or set grep.default_root in jarvis-config.yaml or create jarvis-grep-root.txt with a directory path.",
                 "matches": [],
             }
         base = gr

@@ -1,4 +1,4 @@
-"""Load env (secrets), paths, and ada-config.yaml (provider + app settings)."""
+"""Load env (secrets), paths, and jarvis-config.yaml (provider + app settings)."""
 from __future__ import annotations
 
 import copy
@@ -21,7 +21,7 @@ def is_packaged() -> bool:
 
 
 def data_root() -> Path:
-    """Writable app data: AppData\\Ada when packaged, otherwise the git repo root."""
+    """Writable app data: AppData\\Jarvis when packaged, otherwise the git repo root."""
     env_dir = (os.environ.get("ADA_DATA_DIR") or "").strip()
     if env_dir:
         p = Path(env_dir).expanduser()
@@ -30,12 +30,12 @@ def data_root() -> Path:
     if is_packaged():
         if sys.platform == "win32":
             appdata = os.environ.get("APPDATA") or str(Path.home() / "AppData" / "Roaming")
-            p = Path(appdata) / "Ada"
+            p = Path(appdata) / "Jarvis"
         elif sys.platform == "darwin":
-            p = Path.home() / "Library" / "Application Support" / "Ada"
+            p = Path.home() / "Library" / "Application Support" / "Jarvis"
         else:
             xdg = (os.environ.get("XDG_DATA_HOME") or "").strip()
-            p = Path(xdg) / "Ada" if xdg else Path.home() / ".local" / "share" / "Ada"
+            p = Path(xdg) / "Jarvis" if xdg else Path.home() / ".local" / "share" / "Jarvis"
         p.mkdir(parents=True, exist_ok=True)
         return p
     return Path(__file__).resolve().parent.parent
@@ -52,8 +52,8 @@ else:
     load_dotenv(_REPO_ROOT / ".env")
 
 def _config_yaml_path() -> Path:
-    packaged = data_root() / "ada-config.yaml"
-    bundled = _BACKEND_ROOT / "ada-config.yaml"
+    packaged = data_root() / "jarvis-config.yaml"
+    bundled = _BACKEND_ROOT / "jarvis-config.yaml"
     if is_packaged():
         return packaged
     return bundled
@@ -65,7 +65,7 @@ _LEGACY_CONFIG_YAML = _BACKEND_ROOT / "jarvis-config.yaml"
 # Legacy paths at repo root (used only if no yaml)
 _LLM_PROVIDER_FILE = _REPO_ROOT / "ada-llm-provider.txt"
 _LEGACY_LLM_PROVIDER_FILE = _REPO_ROOT / "jarvis-llm-provider.txt"
-_GREP_ROOT_FILE = _REPO_ROOT / "ada-grep-root.txt"
+_GREP_ROOT_FILE = _REPO_ROOT / "jarvis-grep-root.txt"
 _LEGACY_GREP_ROOT_FILE = _REPO_ROOT / "jarvis-grep-root.txt"
 
 
@@ -210,7 +210,7 @@ def get_llm_provider() -> str:
 
 
 def set_llm_provider(provider: str) -> None:
-    """Set LLM provider; writes ada-config.yaml."""
+    """Set LLM provider; writes jarvis-config.yaml."""
     p = (provider or "").strip().lower()
     if p not in _PROVIDERS:
         raise ValueError("provider must be 'openai', 'xai', or 'local'")
@@ -317,8 +317,8 @@ def chats_dir() -> Path:
 
 def get_grep_root() -> Path | None:
     """
-    Optional default search root for file grep: ada-config.yaml grep.default_root,
-    or ada-grep-root.txt / legacy jarvis-grep-root.txt if yaml is missing.
+    Optional default search root for file grep: jarvis-config.yaml grep.default_root,
+    or jarvis-grep-root.txt / legacy jarvis-grep-root.txt if yaml is missing.
     """
     raw = (_merged_config().get("grep") or {}).get("default_root")
     if raw is None:

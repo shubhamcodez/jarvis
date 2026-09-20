@@ -1,10 +1,10 @@
-# Feature requests we designed Ada around
+# Feature requests we designed Jarvis around
 
 Public asks from Cursor, Claude Code, Codex, Devin, OpenHands, and OpenClaw (2026 forums + GitHub), plus what actually moves SWE-bench / Aider / HumanEval scores.
 
 ## What people keep asking for
 
-| Theme | Who | Ada now |
+| Theme | Who | Jarvis now |
 | --- | --- | --- |
 | Isolated git worktrees / apply-or-discard | Cursor, Claude Code `#17774`, Devin Local | Overlay worktree: edits stay off disk until apply; tests run on a temp materialize |
 | Localize → patch → test, not one-shot dumps | SWE-agent, OpenHands, Agentless | `swe_loop`: grep/read/patch/test/critic |
@@ -12,9 +12,9 @@ Public asks from Cursor, Claude Code, Codex, Devin, OpenHands, and OpenClaw (202
 | Critic / best-of-N / retry | OpenHands critic, Codex subagent wake | Separate critic; auto-retry when tests fail |
 | Compact stable tools | 2026 harness blueprint | list_dir, grep, read_file, apply_patch, write_file, run_tests, run_python, update_plan, write_note, finish |
 | AGENTS.md / project rules | Devin, Claude Code, Cursor | Loaded from the workspace (`AGENTS.md`, `ADA.md`, `CLAUDE.md`) |
-| Artifact / filesystem memory | Blueprint, Claude Code compaction | `ada-artifacts/` handles for notes and localization |
+| Artifact / filesystem memory | Blueprint, Claude Code compaction | `jarvis-artifacts/` handles for notes and localization |
 | Checkpoints / resume | Claude Code `/checkpoint`, OpenClaw overnight agents | Existing run_control checkpoints + overlay export |
-| LSP / diagnostics after edit | LangChain dcode, FalkorDB, Devin | Stdio LSP after every patch (`jedi`/`pylsp`/`pyright` or bundled `ada-pylsp`) |
+| LSP / diagnostics after edit | LangChain dcode, FalkorDB, Devin | Stdio LSP after every patch (`jedi`/`pylsp`/`pyright` or bundled `jarvis-pylsp`) |
 | Parallel / isolated agents | Codex multi-agent, Claude subagents, Cursor `/side` | Explore (read-only) + evaluate (critic) subagents |
 | Conversation branch/merge | Claude Code `#32631` | **Fork** copies history through a message into a child chat; **Merge back** appends new turns to the parent |
 | Cross-session wake on worker done | Codex FR | Existing child register/finish in the router |
@@ -23,7 +23,7 @@ Public asks from Cursor, Claude Code, Codex, Devin, OpenHands, and OpenClaw (202
 | Native GitHub issue fetch | Claude Code `#10998` | `gh issue view` when the user says implement/fix `#N` |
 | `/recap` structured recovery | Codex community FR | `/recap` — task, last result, files, next step (not a dump) |
 | `/btw` / `/side` without polluting the main thread | Codex, Cursor `/side` | Chat-only side question via `/chat/response` |
-| Search old sessions | r/ClaudeCode `/search-memory` | `/search-memory …` over Ada chat logs |
+| Search old sessions | r/ClaudeCode `/search-memory` | `/search-memory …` over Jarvis chat logs |
 | Thumbs on replies | Claude Code `#89824`, `#25164` | 👍 / 👎 on assistant messages; down votes write a fact |
 | Adaptive subagents + goal memory | Cursor forum 163991 | Goal lives in task_spec + artifacts; explore/evaluate subagents |
 | Worktree cleanup hooks | Cursor forum 139624 | Overlay temps are deleted after tests |
@@ -50,7 +50,7 @@ Public asks from Cursor, Claude Code, Codex, Devin, OpenHands, and OpenClaw (202
 | `/loop` in-session check-ins | Claude Code, Cursor `/loop` | `/loop 5m …` ticks via the backend scheduler; chat-only; `/loop stop` |
 | `/tasks` / `/bashes` | Claude Code | Lists durable tasks + active runs |
 | `/goal` completion condition | Claude Code `/goal`, Codex | Stored on the chat + banner; critic runs once after each turn; `/goal clear` |
-| Saved plan document | Claude Code `#30438` | SWE `update_plan` writes `ada-artifacts/PLAN.md` and persists on the chat; `/plan show` + live todo strip |
+| Saved plan document | Claude Code `#30438` | SWE `update_plan` writes `jarvis-artifacts/PLAN.md` and persists on the chat; `/plan show` + live todo strip |
 | Slash autocomplete | Claude Code / Cursor | Composer `/` lists builtins, workspace commands, and skills |
 | Apply/Discard batch | Cursor, Claude Code `#17774` | Bar above chat applies or drops the whole proposed-edit batch |
 | Multi-ecosystem tests | SWE-bench / Aider polyglot | `run_tests` picks pytest, npm test, cargo test, or go test |
@@ -65,7 +65,7 @@ Public asks from Cursor, Claude Code, Codex, Devin, OpenHands, and OpenClaw (202
 - **GAIA / AgentBench / τ-bench:** tools + unambiguous answers, not chat vibes.
 - **OpenHands critic papers:** filter failing tests, then score remaining trajectories.
 
-So Ada’s coding path is no longer “write a sandbox script and dump whole files.” Linked-repo work uses the SWE loop. Plots/math still use the sandbox.
+So Jarvis’s coding path is no longer “write a sandbox script and dump whole files.” Linked-repo work uses the SWE loop. Plots/math still use the sandbox.
 
 ## Run the suites
 

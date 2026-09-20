@@ -23,7 +23,7 @@ _MAX_STEPS = 18
 _CRITIC_RETRIES = 2
 _TOOL_RESULT_CHARS = 7000
 
-_SWE_SYSTEM = """You are Ada's software engineering agent. This is a local unit-test coding exercise in a toy repository. You solve repo tasks with tools.
+_SWE_SYSTEM = """You are Jarvis's software engineering agent. This is a local unit-test coding exercise in a toy repository. You solve repo tasks with tools.
 
 Stable workflow (do not skip):
 1. Localize with list_dir, grep, read_file, and git_history (log/blame) until you know the exact files and lines.

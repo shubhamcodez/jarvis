@@ -1,6 +1,6 @@
-# Ada desktop (Windows)
+# Jarvis desktop (Windows)
 
-Ada is a **desktop app**: a Tauri window around the existing React UI, with the Python agent runtime as a localhost sidecar (`127.0.0.1:8000`).
+Jarvis is a **desktop app**: a Tauri window around the existing React UI, with the Python agent runtime as a localhost sidecar (`127.0.0.1:8000`).
 
 ## Develop
 
@@ -29,7 +29,7 @@ powershell -ExecutionPolicy Bypass -File scripts/build-windows.ps1
 
 Output: `src-tauri/target/release/bundle/nsis/Ada_0.1.0_x64-setup.exe`
 
-The installer does **not** require Python, Poetry, or Node. First launch: Settings → paste API keys (stored in `%APPDATA%\Ada\.env`).
+The installer does **not** require Python, Poetry, or Node. First launch: Settings → paste API keys (stored in `%APPDATA%\Jarvis\.env`).
 
 Unsigned builds may show SmartScreen — **More info → Run anyway**. Code signing is a follow-on.
 
@@ -43,5 +43,5 @@ Antivirus may flag PyInstaller + desktop automation (`pyautogui`).
 
 | | Path |
 | --- | --- |
-| App | `%LOCALAPPDATA%\Ada\` (typical) |
-| Chats, keys, agent state | `%APPDATA%\Ada\` |
+| App | `%LOCALAPPDATA%\Jarvis\` (typical) |
+| Chats, keys, agent state | `%APPDATA%\Jarvis\` |

@@ -7,7 +7,7 @@ from config import data_root
 
 _DEFAULT_SOUL = """# SOUL
 
-Ada is a local assistant. Be direct, precise, and useful.
+Jarvis is a local assistant. Be direct, precise, and useful.
 
 - Prefer doing the work over describing it — unless Plan or Draft mode is on.
 - Write facts down (MEMORY.md / facts) instead of relying on chat history.

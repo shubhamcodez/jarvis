@@ -109,10 +109,10 @@ import { getActiveFileMention, rankProjectPathMatches } from './projectPathSugge
 import { ProjectFileTree } from './ProjectFileTree'
 import { CodingEditSummaryCards } from './CodingEditSummaryCards'
 import { WorkspaceFileReview } from './WorkspaceFileReview'
-import { stripAdaFileFencesForDisplay } from './workspaceFileEdits'
+import { stripJarvisFileFencesForDisplay } from './workspaceFileEdits'
 import { CHAT_HELP_MANUAL_MARKDOWN } from './chatHelpManual'
 import LivePreview, { isPreviewLanguage } from './LivePreview'
-import { ensureNotifyPermission, notifyAda } from './notify'
+import { ensureNotifyPermission, notifyJarvis } from './notify'
 import {
   EMPTY_USER_PROFILE,
   INTRODUCE_STEPS,
@@ -125,7 +125,6 @@ import {
 import {
   pushWorkspaceEdit,
   workspaceUndoStatus,
-  peekWorkspaceUndo,
   finalizeWorkspaceUndoPop,
   peekWorkspaceRedo,
   finalizeWorkspaceRedoPop,
@@ -1501,7 +1500,7 @@ function App() {
     [selectChat],
   )
 
-  const selectAda = useCallback(async () => {
+  const selectJarvis = useCallback(async () => {
     setAgentEditorId(null)
     setPanel('chats')
     const owner = (customAgents || []).find((a) => a.chat_id && a.chat_id === currentChatId)
@@ -1771,30 +1770,23 @@ function App() {
     [workspaceLocalLabel, resolveWorkspaceFileBase],
   )
 
-  const applyWorkspaceUndo = useCallback(async () => {
-    const label = workspaceLocalLabel.trim()
-    if (!label) return
-    const peek = await peekWorkspaceUndo(label)
-    if (!peek?.deltas?.length) return
-    const results = new Map()
-    for (const d of peek.deltas) {
-      const r = await saveProjectFile(d.relPath, d.content, { skipUndoRecord: true })
-      if (!r?.ok) {
-        window.alert(r?.error || 'Could not restore one or more files.')
-        return
-      }
-      results.set(d.relPath, r)
+  const restoreCheckpointById = useCallback(async (checkpointId) => {
+    const r = await restoreCheckpoint(checkpointId)
+    if (!r?.ok) {
+      window.alert(r?.error || 'Could not restore checkpoint.')
+      return false
     }
-    await finalizeWorkspaceUndoPop(label)
-    setFilePreview((p) => {
-      if (!p) return p
-      const d = peek.deltas.find((x) => x.relPath === p.relPath)
-      if (!d) return p
-      const r = results.get(d.relPath)
-      return { ...p, body: d.content, source: r?.cacheOnly ? 'cache' : 'handle' }
-    })
-    setWorkspaceUndoTick((t) => t + 1)
-  }, [workspaceLocalLabel, saveProjectFile])
+    await refreshControlPlane()
+    const files = Array.isArray(r.restored) ? r.restored.filter(Boolean).join(', ') : r.restored || ''
+    window.alert(files ? `Restored checkpoint files: ${files}` : `Restored checkpoint ${r.id || checkpointId}.`)
+    return true
+  }, [refreshControlPlane])
+
+  const latestRestorableCheckpoint = useMemo(
+    () =>
+      checkpoints.find((c) => c?.kind === 'workspace_write' || c?.kind === 'overlay_turn') || null,
+    [checkpoints],
+  )
 
   const applyWorkspaceRedo = useCallback(async () => {
     const label = workspaceLocalLabel.trim()
@@ -2496,28 +2488,27 @@ function App() {
     if (slashLocal && !slashReserved.test(slashLocal[1]) && filesToSend.length === 0 && !opts.skipSlash) {
       const cmd = slashLocal[1]
       const rest = (slashLocal[2] || '').trim()
-      if (/^undo$/i.test(cmd) && workspaceLocalLabel.trim()) {
-        const peek = await peekWorkspaceUndo(workspaceLocalLabel.trim())
-        if (peek?.deltas?.length) {
-          setInput('')
-          setFileMention(null)
-          appendMessage(raw, true)
-          try {
-            await appendChatLog('user', raw)
-          } catch {
-            /* ignore */
-          }
-          await applyWorkspaceUndo()
-          const body = `Undid the last workbench edit (${peek.deltas.map((d) => d.relPath).join(', ')}).`
-          appendMessage(body, false)
-          try {
-            await appendChatLog('assistant', body)
-          } catch {
-            /* ignore */
-          }
-          refreshChatList()
-          return
+      if (/^undo$/i.test(cmd) && latestRestorableCheckpoint) {
+        setInput('')
+        setFileMention(null)
+        appendMessage(raw, true)
+        try {
+          await appendChatLog('user', raw)
+        } catch {
+          /* ignore */
         }
+        const ok = await restoreCheckpointById(latestRestorableCheckpoint.id)
+        const body = ok
+          ? `Restored checkpoint \`${latestRestorableCheckpoint.id}\` (${latestRestorableCheckpoint.kind}).`
+          : 'Could not restore checkpoint.'
+        appendMessage(body, false)
+        try {
+          await appendChatLog('assistant', body)
+        } catch {
+          /* ignore */
+        }
+        refreshChatList()
+        return
       }
       try {
         const cid = currentChatId || (await getCurrentChatId())
@@ -2534,7 +2525,7 @@ function App() {
         }
         if (data?.kind === 'notify') {
           const perm = await ensureNotifyPermission()
-          notifyAda('Ada', perm === 'granted' ? 'Notifications are on.' : 'Notifications were blocked.')
+          notifyJarvis('Jarvis', perm === 'granted' ? 'Notifications are on.' : 'Notifications were blocked.')
         }
         if (data?.set_provider) {
           try {
@@ -2572,7 +2563,7 @@ function App() {
           const url = URL.createObjectURL(blob)
           const a = document.createElement('a')
           a.href = url
-          a.download = data.filename || 'ada-chat.md'
+          a.download = data.filename || 'jarvis-chat.md'
           a.click()
           URL.revokeObjectURL(url)
         }
@@ -2774,7 +2765,7 @@ function App() {
             onUsage: (u) => setLiveUsage(u),
             onChunk: (delta) => {
               streamAdaStripRef.current += delta
-              setLiveReply(stripAdaFileFencesForDisplay(streamAdaStripRef.current))
+              setLiveReply(stripJarvisFileFencesForDisplay(streamAdaStripRef.current))
             },
             onStatus: (d) => {
               if (d.phase === 'done') return
@@ -2821,10 +2812,10 @@ function App() {
         }
         if (streamResult?.pending_approvals?.length) {
           setPendingApprovals(streamResult.pending_approvals)
-          notifyAda('Ada needs approval', streamResult.pending_approvals[0]?.summary || 'A write is waiting.')
+          notifyJarvis('Jarvis needs approval', streamResult.pending_approvals[0]?.summary || 'A write is waiting.')
         } else {
           refreshPendingApprovals()
-          notifyAda('Ada finished', String(streamResult?.reply || reply || 'Done.').split('\n')[0])
+          notifyJarvis('Jarvis finished', String(streamResult?.reply || reply || 'Done.').split('\n')[0])
         }
         appendMessage(reply || '', false)
         await appendChatLog('assistant', reply || '', chatId)
@@ -3498,14 +3489,14 @@ function App() {
               id="chat-input"
               placeholder={
                 sending
-                  ? 'Ada is working — Enter or Tab queues a follow-up'
+                  ? 'Jarvis is working — Enter or Tab queues a follow-up'
                   : activeAgent
                     ? `Message ${activeAgent.name}…`
                   : codingModeEnabled && workspaceSnapshot.trim()
-                    ? 'Message Ada… @file — Ctrl+click several, Enter to insert'
+                    ? 'Message Jarvis… @file — Ctrl+click several, Enter to insert'
                     : webSearchMode
-                      ? 'Message Ada… (each send uses the web: top results inform the reply)'
-                      : 'Message Ada…'
+                      ? 'Message Jarvis… (each send uses the web: top results inform the reply)'
+                      : 'Message Jarvis…'
               }
               rows={1}
               value={input}
@@ -3560,8 +3551,8 @@ function App() {
     <div className="app">
       <header className="app-navbar">
         <div className="navbar-brand">
-          <img src="/Ada.jpg" alt="" className="navbar-logo" />
-          <span className="navbar-title">Ada</span>
+          <img src="/Jarvis.jpg" alt="" className="navbar-logo" />
+          <span className="navbar-title">Jarvis</span>
         </div>
         <div className="navbar-center">
           <button
@@ -3729,14 +3720,14 @@ function App() {
                       type="button"
                       className="chat-history-item"
                       onClick={() => {
-                        selectAda()
+                        selectJarvis()
                         setPanel('chats')
                       }}
                     >
                       <span className="navbar-agent-emoji" aria-hidden>
                         A
                       </span>
-                      <span className="chat-history-title">Ada</span>
+                      <span className="chat-history-title">Jarvis</span>
                     </button>
                   </div>
                   {visibleAgents.length === 0 ? (
@@ -3844,7 +3835,7 @@ function App() {
                 <h2 className="repo-context-card__title">Project context</h2>
               </div>
               <p className="repo-context-card__subtitle">
-                Open a folder on this computer. Desktop Ada uses the real path (allowlisted); the browser still builds a local index.
+                Open a folder on this computer. Desktop Jarvis uses the real path (allowlisted); the browser still builds a local index.
               </p>
               <input
                 ref={projectFolderInputRef}
@@ -3857,7 +3848,7 @@ function App() {
                 {!workspaceSnapshot.trim() ? (
                   <div className="repo-context-empty">
                     <p className="repo-context-empty__hint">
-                      Choose a folder — Ada reads files in your browser and sends an index to the model (no path
+                      Choose a folder — Jarvis reads files in your browser and sends an index to the model (no path
                       copy-paste needed).
                     </p>
                     <button
@@ -3888,12 +3879,12 @@ function App() {
                         <button
                           type="button"
                           className="repo-context-icon-btn"
-                          title="Undo last saved change to a project file (per browser; survives refresh)"
-                          aria-label="Undo last project file edit"
-                          disabled={!workspaceUndoUi.canUndo}
-                          onClick={() => applyWorkspaceUndo()}
+                          title="Restore the latest file checkpoint (SWE turn or last write)"
+                          aria-label="Restore checkpoint"
+                          disabled={!latestRestorableCheckpoint}
+                          onClick={() => latestRestorableCheckpoint && restoreCheckpointById(latestRestorableCheckpoint.id)}
                         >
-                          Undo
+                          Restore checkpoint
                         </button>
                         <button
                           type="button"
@@ -3996,7 +3987,7 @@ function App() {
                   <div className="coding-workbench-empty__inner">
                     <h2 className="coding-workbench-empty__title">Coding workspace</h2>
                     <p className="coding-workbench-empty__text">
-                      Open a file from the tree to preview it here, or send a message so Ada can propose edits—diffs
+                      Open a file from the tree to preview it here, or send a message so Jarvis can propose edits—diffs
                       appear in this pane for review.
                     </p>
                   </div>
@@ -4227,7 +4218,7 @@ function App() {
               <div className="settings-section">
                 <label className="settings-label">Model</label>
                 <p className="settings-description">
-                  Ada probes GPU, NPU, and RAM on this PC at launch (Windows, macOS, Linux) and picks a local model that fits. Cloud APIs stay optional.
+                  Jarvis probes GPU, NPU, and RAM on this PC at launch (Windows, macOS, Linux) and picks a local model that fits. Cloud APIs stay optional.
                 </p>
                 <select
                   className="settings-model-select"
@@ -4371,7 +4362,7 @@ function App() {
               <div className="settings-section">
                 <label className="settings-label">Autonomy</label>
                 <p className="settings-description">
-                  How much Ada may execute without asking. High-impact writes (email, delete, shell, GUI) stay gated by default.
+                  How much Jarvis may execute without asking. High-impact writes (email, delete, shell, GUI) stay gated by default.
                 </p>
                 <select
                   className="settings-model-select"
@@ -4523,25 +4514,25 @@ function App() {
               <div className="settings-section">
                 <label className="settings-label">Checkpoints</label>
                 <p className="settings-description">
-                  File writes are snapshotted. Restore the previous contents if a tool call went wrong.
+                  File writes and SWE applies are snapshotted. Restore a checkpoint to put those files back.
                 </p>
                 <ul className="settings-fact-list">
-                  {checkpoints.slice(0, 6).map((c) => (
+                  {checkpoints.slice(0, 12).map((c) => {
+                    const restorable = c.kind === 'workspace_write' || c.kind === 'overlay_turn'
+                    return (
                     <li key={c.id}>
                       <span>{c.kind}: {c.summary}</span>
-                      {c.kind === 'workspace_write' ? (
+                      {restorable ? (
                         <button
                           type="button"
-                          onClick={async () => {
-                            const r = await restoreCheckpoint(c.id)
-                            if (!r?.ok) alert(r?.error || 'Could not restore.')
-                          }}
+                          onClick={() => restoreCheckpointById(c.id)}
                         >
-                          Undo
+                          Restore checkpoint
                         </button>
                       ) : null}
                     </li>
-                  ))}
+                    )
+                  })}
                 </ul>
               </div>
               <div className="settings-section">

@@ -1,4 +1,4 @@
-"""Generate Tauri PNG/ICO icons from frontend/public/Ada.jpg."""
+"""Generate Tauri PNG/ICO icons from frontend/public/Jarvis.jpg."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -6,7 +6,7 @@ from pathlib import Path
 from PIL import Image
 
 ROOT = Path(__file__).resolve().parent.parent
-SRC = ROOT / "frontend" / "public" / "Ada.jpg"
+SRC = ROOT / "frontend" / "public" / "Jarvis.jpg"
 OUT = ROOT / "src-tauri" / "icons"
 
 

@@ -40,9 +40,9 @@ fn spawn_dev_backend() -> std::io::Result<Child> {
 fn sidecar_exe(app: &tauri::AppHandle) -> Option<PathBuf> {
     if let Ok(res) = app.path().resource_dir() {
         let candidates = [
-            res.join("ada-backend.exe"),
-            res.join("binaries").join("ada-backend.exe"),
-            res.join("ada-backend"),
+            res.join("jarvis-backend.exe"),
+            res.join("binaries").join("jarvis-backend.exe"),
+            res.join("jarvis-backend"),
         ];
         for c in candidates {
             if c.exists() {
@@ -51,7 +51,7 @@ fn sidecar_exe(app: &tauri::AppHandle) -> Option<PathBuf> {
         }
     }
     if let Ok(exe) = app.path().executable_dir() {
-        let c = exe.join("ada-backend.exe");
+        let c = exe.join("jarvis-backend.exe");
         if c.exists() {
             return Some(c);
         }
@@ -61,7 +61,7 @@ fn sidecar_exe(app: &tauri::AppHandle) -> Option<PathBuf> {
 
 fn spawn_packaged_backend(app: &tauri::AppHandle) -> std::io::Result<Child> {
     let exe = sidecar_exe(app).ok_or_else(|| {
-        std::io::Error::new(std::io::ErrorKind::NotFound, "ada-backend sidecar not found")
+        std::io::Error::new(std::io::ErrorKind::NotFound, "jarvis-backend sidecar not found")
     })?;
     let mut cmd = Command::new(exe);
     cmd.env("ADA_PACKAGED", "1")
@@ -91,7 +91,7 @@ fn pipe_child_logs(child: &mut Child) {
         thread::spawn(move || {
             let reader = BufReader::new(out);
             for line in reader.lines().flatten() {
-                eprintln!("[ada-backend] {line}");
+                eprintln!("[jarvis-backend] {line}");
             }
         });
     }
@@ -99,7 +99,7 @@ fn pipe_child_logs(child: &mut Child) {
         thread::spawn(move || {
             let reader = BufReader::new(err);
             for line in reader.lines().flatten() {
-                eprintln!("[ada-backend] {line}");
+                eprintln!("[jarvis-backend] {line}");
             }
         });
     }
@@ -120,21 +120,21 @@ fn api_token_path(packaged: bool) -> PathBuf {
             .unwrap_or_else(|_| ".".into());
         let mut p = PathBuf::from(appdata);
         if cfg!(target_os = "windows") {
-            p.push("Ada");
+            p.push("Jarvis");
         } else if cfg!(target_os = "macos") {
             p.push("Library");
             p.push("Application Support");
-            p.push("Ada");
+            p.push("Jarvis");
         } else {
             p.push(".local");
             p.push("share");
-            p.push("Ada");
+            p.push("Jarvis");
         }
         p.push(".secrets");
-        p.push("ada-api-token");
+        p.push("jarvis-api-token");
         p
     } else {
-        repo_root().join(".secrets").join("ada-api-token")
+        repo_root().join(".secrets").join("jarvis-api-token")
     }
 }
 
@@ -180,13 +180,13 @@ pub fn run() {
                     let _ = wait_for_health(Duration::from_secs(45));
                 }
                 Err(e) => {
-                    eprintln!("Failed to start Ada backend: {e}");
+                    eprintln!("Failed to start Jarvis backend: {e}");
                 }
             }
             Ok(())
         })
         .build(tauri::generate_context!())
-        .expect("error while building Ada")
+        .expect("error while building Jarvis")
         .run(|app, event| {
             if let tauri::RunEvent::Exit = event {
                 if let Some(state) = app.try_state::<BackendChild>() {

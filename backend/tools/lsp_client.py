@@ -1,4 +1,4 @@
-"""Stdio JSON-RPC LSP client. Prefers jedi/pylsp/pyright; falls back to bundled ada-pylsp."""
+"""Stdio JSON-RPC LSP client. Prefers jedi/pylsp/pyright; falls back to bundled jarvis-pylsp."""
 from __future__ import annotations
 
 import json
@@ -203,9 +203,9 @@ def run_lsp_diagnostics(
         return {"ok": True, "engine": "none", "diagnostics": [], "checked": 0}
 
     cmd = _pick_server()
-    engine = Path(cmd[0]).name if cmd else "ada-pylsp"
+    engine = Path(cmd[0]).name if cmd else "jarvis-pylsp"
     if cmd and cmd[-1].endswith("ada_pylsp.py"):
-        engine = "ada-pylsp"
+        engine = "jarvis-pylsp"
     client = LspClient(cmd, workspace.root, timeout_sec=timeout_sec)
     try:
         client.initialize()

@@ -10,7 +10,7 @@ from tools.shell_runner import is_shell_enabled
 
 MAX_AGENTS_PER_PLAN = 5
 
-_SUPERVISOR_SYSTEM = """You are the Ada supervisor. You decide how to handle each user message.
+_SUPERVISOR_SYSTEM = """You are the Jarvis supervisor. You decide how to handle each user message.
 
 You can assign **one specialist** or **several in sequence** when the task naturally splits (e.g. fetch market data then plot it; run shell prep then coding; desktop navigation then a summary — use your judgment).
 

@@ -1,4 +1,4 @@
-# Ada
+# Jarvis
 
 Local AI assistant: chat, coding workspace, desktop/shell/finance/Google agents.
 

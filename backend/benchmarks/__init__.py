@@ -1,1 +1,1 @@
-"""Ada benchmark suites: SWE fixtures, HumanEval, general tool/reasoning tasks."""
+"""Jarvis benchmark suites: SWE fixtures, HumanEval, general tool/reasoning tasks."""

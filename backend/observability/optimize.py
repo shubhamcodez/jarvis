@@ -17,7 +17,7 @@ from .eval_runner import pass_at_k
 
 STATS_FILE = "optimization_stats.json"
 
-OPTIMIZER_SYSTEM = """You are an optimization analyst for an Ada-style agent system with:
+OPTIMIZER_SYSTEM = """You are an optimization analyst for an Jarvis-style agent system with:
 - A supervisor (LLM decides: chat vs desktop vs coding vs shell vs finance agent)
 - Desktop agent (screenshot + vision LLM → mouse + keyboard: click/double/right-click, type, press keys, hotkeys, scroll via pyautogui)
 - Coding agent (LLM writes Python → sandbox: stdlib + numpy/pandas/matplotlib/yfinance; no GUI)

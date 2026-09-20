@@ -7,7 +7,7 @@ from agents.swe_loop import _llm_json, critic_evaluate
 from agents.swe_tools import catalog_prompt, dispatch
 from tools.overlay_workspace import OverlayWorkspace
 
-_EXPLORE_SYSTEM = """You are Ada's read-only explore subagent.
+_EXPLORE_SYSTEM = """You are Jarvis's read-only explore subagent.
 Find the files and functions that matter. Do not edit.
 Tools allowed: list_dir, grep, read_file, write_note, finish.
 Output ONLY JSON: {"tool":"...","args":{}}

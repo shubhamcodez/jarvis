@@ -11,7 +11,7 @@ from config import data_root
 
 
 def artifacts_root(run_id: Optional[str] = None) -> Path:
-    base = data_root() / "ada-artifacts"
+    base = data_root() / "jarvis-artifacts"
     if run_id:
         base = base / run_id
     base.mkdir(parents=True, exist_ok=True)

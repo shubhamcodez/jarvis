@@ -13,7 +13,7 @@ _LOCK = threading.Lock()
 
 
 def _path() -> Path:
-    p = data_root() / "ada-observability" / "reactions.jsonl"
+    p = data_root() / "jarvis-observability" / "reactions.jsonl"
     p.parent.mkdir(parents=True, exist_ok=True)
     return p
 

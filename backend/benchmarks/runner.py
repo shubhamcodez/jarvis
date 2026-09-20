@@ -1,4 +1,4 @@
-"""Run Ada against local SWE fixtures, HumanEval, and general sandbox tasks."""
+"""Run Jarvis against local SWE fixtures, HumanEval, and general sandbox tasks."""
 from __future__ import annotations
 
 import argparse
@@ -201,7 +201,7 @@ def summarize(runs: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Ada benchmark runner")
+    parser = argparse.ArgumentParser(description="Jarvis benchmark runner")
     parser.add_argument(
         "--suite",
         choices=("gold", "swe", "general", "humaneval", "gsm8k", "all"),

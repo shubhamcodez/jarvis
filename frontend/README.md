@@ -1,4 +1,4 @@
-# Ada frontend
+# Jarvis frontend
 
 Dev server proxies `/api` and `/ws` to **`http://localhost:8000`**. If you only run `npm run dev`, Vite will log `ECONNREFUSED` / HTTP 502 until the backend is up.
 

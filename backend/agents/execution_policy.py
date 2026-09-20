@@ -8,7 +8,7 @@ from config import get_run_mode
 WRITE_KINDS = frozenset({"shell", "workspace_write", "google_write", "desktop"})
 
 _BLOCK_MSG = {
-    "plan": "Plan mode is on — Ada will not {kind}. Switch to Draft or Agent to execute.",
+    "plan": "Plan mode is on — Jarvis will not {kind}. Switch to Draft or Agent to execute.",
     "draft": "Draft mode is on — {kind} needs your confirmation first.",
 }
 

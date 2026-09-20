@@ -32,7 +32,7 @@ def normalize_workspace_relative_path(raw: str) -> Optional[str]:
     return p
 
 
-def extract_ada_file_edits(text: str) -> tuple[str, list[dict[str, Any]]]:
+def extract_workspace_file_edits(text: str) -> tuple[str, list[dict[str, Any]]]:
     """
     Strip ada-file fences from text and return ({clean_markdown}, [{path, content}, ...]).
     Order preserved. Duplicate paths: last wins (caller may dedupe).

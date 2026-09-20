@@ -1,6 +1,6 @@
 # LLM models (OpenAI)
 
-- **Default (reasoning):** `gpt-5.4` for chat, stream, classify, vision (desktop), and all agent LLM calls when `backend/ada-config.yaml` has `llm_provider: openai`.
+- **Default (reasoning):** `gpt-5.4` for chat, stream, classify, vision (desktop), and all agent LLM calls when `backend/jarvis-config.yaml` has `llm_provider: openai`.
 - **Override:** set in the project root `.env` or environment:
   - `OPENAI_CHAT_MODEL` — e.g. `gpt-5-mini`, `o4-mini`, `gpt-4o`
   - `OPENAI_VISION_MODEL` — vision / screenshot steps (defaults to same as chat if unset)

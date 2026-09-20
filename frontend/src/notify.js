@@ -1,4 +1,4 @@
-/** Browser / Tauri notifications when Ada finishes or needs HITL (Claude Code notify hook). */
+/** Browser / Tauri notifications when Jarvis finishes or needs HITL (Claude Code notify hook). */
 
 export async function ensureNotifyPermission() {
   if (typeof window === 'undefined' || typeof Notification === 'undefined') return 'denied'
@@ -11,11 +11,11 @@ export async function ensureNotifyPermission() {
   }
 }
 
-export function notifyAda(title, body) {
+export function notifyJarvis(title, body) {
   if (typeof document !== 'undefined' && document.visibilityState === 'visible') return
   if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return
   try {
-    new Notification(title || 'Ada', { body: String(body || '').slice(0, 180) })
+    new Notification(title || 'Jarvis', { body: String(body || '').slice(0, 180) })
   } catch {
     /* ignore */
   }

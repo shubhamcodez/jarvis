@@ -11,7 +11,7 @@ import threading
 import time
 from typing import Optional
 
-logger = logging.getLogger("ada.memory.writeback")
+logger = logging.getLogger("jarvis.memory.writeback")
 
 _FACT_HINTS = re.compile(
     r"(?i)\b("

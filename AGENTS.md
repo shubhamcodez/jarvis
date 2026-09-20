@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Ada is a local desktop assistant (FastAPI + LangGraph + Tauri).
+Jarvis is a local desktop assistant (FastAPI + LangGraph + Tauri).
 
 ## Setup
 

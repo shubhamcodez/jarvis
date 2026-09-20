@@ -11,7 +11,7 @@ from unittest.mock import patch
 class LocalTokenTests(unittest.TestCase):
     def test_verify_roundtrip(self):
         with tempfile.TemporaryDirectory() as td:
-            path = Path(td) / "ada-api-token"
+            path = Path(td) / "jarvis-api-token"
             with patch.dict("os.environ", {"ADA_API_TOKEN": "", "ADA_API_TOKEN_PATH": str(path)}, clear=False):
                 import auth.local_token as lt
 

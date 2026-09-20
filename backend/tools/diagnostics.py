@@ -39,7 +39,7 @@ def syntax_check_python(workspace: OverlayWorkspace, rel_paths: Optional[list[st
 
 
 def lsp_check_python(workspace: OverlayWorkspace, rel_paths: Optional[list[str]] = None) -> dict[str, Any]:
-    """Language-server diagnostics after edits. Falls back to bundled ada-pylsp."""
+    """Language-server diagnostics after edits. Falls back to bundled jarvis-pylsp."""
     try:
         return run_lsp_diagnostics(workspace, rel_paths)
     except Exception as e:

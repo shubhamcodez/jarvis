@@ -8,7 +8,7 @@ from typing import Callable, Optional
 from agents.models import chat_completion_limit_kwargs, get_llm_client, should_omit_temperature
 from tools.finance_data import fetch_finance_bundle
 
-_PLAN_SYSTEM = """You are a finance data planner for Ada. The user wants stock/market **data** answered in prose; data will be fetched with **yfinance** (Yahoo Finance). Custom plots, regressions, or heavy Python analysis are handled by the **coding** agent, not here—still plan tickers if this request reached you.
+_PLAN_SYSTEM = """You are a finance data planner for Jarvis. The user wants stock/market **data** answered in prose; data will be fetched with **yfinance** (Yahoo Finance). Custom plots, regressions, or heavy Python analysis are handled by the **coding** agent, not here—still plan tickers if this request reached you.
 
 Output ONLY a JSON object (no markdown), shape:
 {

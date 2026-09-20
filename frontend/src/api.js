@@ -18,7 +18,7 @@ export async function initApiAuth() {
 }
 
 export function authHeaders() {
-  return _apiToken ? { 'X-Ada-Token': _apiToken } : {}
+  return _apiToken ? { 'X-Jarvis-Token': _apiToken } : {}
 }
 
 export function isDesktopShell() {

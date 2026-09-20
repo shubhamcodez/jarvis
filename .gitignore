@@ -21,7 +21,7 @@ src-tauri/target/
 # Custom agent data (uploads, memory, schedules)
 custom_agents/
 venv/
-ada-observability/
+jarvis-observability/
 jarvis-observability/
 
 # Shell agent default workdir (host commands)
@@ -54,4 +54,4 @@ Thumbs.db
 
 # Downloaded benchmark corpora + SWE run artifacts
 backend/benchmarks/data/
-ada-artifacts/
+jarvis-artifacts/

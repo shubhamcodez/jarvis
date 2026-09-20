@@ -13,7 +13,7 @@ from agents.models import chat_completion_limit_kwargs, get_llm_client, should_o
 from auth.google_oauth import get_valid_access_token_for_session
 from tools.google_workspace import run_google_op, truncate_for_llm
 
-_PLANNER_SYSTEM = """You are the Google Workspace planner for Ada. The user wants Google Calendar and/or Gmail actions.
+_PLANNER_SYSTEM = """You are the Google Workspace planner for Jarvis. The user wants Google Calendar and/or Gmail actions.
 You output ONLY valid JSON (no markdown fences).
 
 Shape:
@@ -52,7 +52,7 @@ Rules:
 - Times: use ISO 8601; for create always set time_zone when using dateTime.
 """
 
-_SUMMARY_SYSTEM = """You are Ada. Summarize Google Calendar and Gmail tool results for the user.
+_SUMMARY_SYSTEM = """You are Jarvis. Summarize Google Calendar and Gmail tool results for the user.
 
 Rules:
 - Reply in clear **Markdown**.

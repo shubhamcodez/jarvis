@@ -12,7 +12,7 @@ def _root() -> Path:
 
 
 _ROOT = _root()
-_ADA_OBS = _ROOT / "ada-observability"
+_ADA_OBS = _ROOT / "jarvis-observability"
 _JARVIS_OBS = _ROOT / "jarvis-observability"
 if _ADA_OBS.exists():
     OBS_DIR = _ADA_OBS

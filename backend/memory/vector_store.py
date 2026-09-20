@@ -74,7 +74,7 @@ class VectorStore:
             elif len(embedding) != self._dim:
                 import logging
 
-                logging.getLogger("ada.memory").warning(
+                logging.getLogger("jarvis.memory").warning(
                     "drop chunk %s: embedding dim %s != store %s",
                     chunk.chunk_id,
                     len(embedding),
@@ -227,7 +227,7 @@ class VectorStore:
                     elif len(emb) != self._dim:
                         import logging
 
-                        logging.getLogger("ada.memory").warning(
+                        logging.getLogger("jarvis.memory").warning(
                             "skip persisted chunk %s: dim %s != %s",
                             chunk.chunk_id,
                             len(emb),

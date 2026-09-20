@@ -7,7 +7,7 @@ turn
   ├ llm
   └ specialist
 
-Persisted as jsonl under ada-observability/traces/spans.jsonl.
+Persisted as jsonl under jarvis-observability/traces/spans.jsonl.
 """
 from __future__ import annotations
 

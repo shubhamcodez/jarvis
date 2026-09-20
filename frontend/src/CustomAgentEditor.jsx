@@ -712,7 +712,7 @@ export function CustomAgentEditor({ agentId, onClose, onChanged, onDeleted }) {
                 onChange={(e) => setRoutineDraft({ ...routineDraft, run_mode: e.target.value })}
               >
                 <option value="isolated">Isolated (agent chat)</option>
-                <option value="continue">Continue (current Ada chat)</option>
+                <option value="continue">Continue (current Jarvis chat)</option>
               </select>
             </label>
             <label className="agent-check">

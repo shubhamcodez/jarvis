@@ -1,0 +1,33 @@
+{
+  "ok": true,
+  "needles": [
+    "pkg/rates.py",
+    "pkg/tax.py",
+    "checkout",
+    "total",
+    "amount",
+    "state",
+    "apply",
+    "lookup"
+  ],
+  "files": [
+    "tests/test_checkout.py",
+    "pkg/checkout.py",
+    "pkg/tax.py"
+  ],
+  "snippets": {
+    "tests/test_checkout.py": [
+      "3: from pkg.checkout import total",
+      "6: class TestCheckout(unittest.TestCase):",
+      "3: from pkg.checkout import total"
+    ],
+    "pkg/checkout.py": [
+      "4: def total(amount, state):",
+      "4: def total(amount, state):",
+      "5:     return amount * (1 + tax_rate(state))"
+    ],
+    "pkg/tax.py": [
+      "1: def tax_rate(state):"
+    ]
+  }
+}

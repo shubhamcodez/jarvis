@@ -1,6 +1,6 @@
 """Per-install API token so loopback is not an open shell/HITL/keys API.
 
-The token lives in data_root/.secrets/ada-api-token (0600). Vite injects it on
+The token lives in data_root/.secrets/jarvis-api-token (0600). Vite injects it on
 the dev proxy; Tauri reads the same file. Nothing HTTP-serves the token.
 """
 from __future__ import annotations
@@ -21,9 +21,9 @@ def token_path() -> Path:
     try:
         from config import data_root
 
-        return data_root() / ".secrets" / "ada-api-token"
+        return data_root() / ".secrets" / "jarvis-api-token"
     except Exception:
-        return Path(__file__).resolve().parents[2] / ".secrets" / "ada-api-token"
+        return Path(__file__).resolve().parents[2] / ".secrets" / "jarvis-api-token"
 
 
 def get_or_create_token() -> str:
@@ -66,7 +66,7 @@ def verify_token(provided: Optional[str]) -> bool:
 
 
 def token_from_headers(headers) -> Optional[str]:
-    raw = (headers.get("x-ada-token") or headers.get("X-Ada-Token") or "").strip()
+    raw = (headers.get("x-jarvis-token") or headers.get("X-Jarvis-Token") or "").strip()
     if raw:
         return raw
     auth = (headers.get("authorization") or headers.get("Authorization") or "").strip()

@@ -1,0 +1,28 @@
+{
+  "ok": true,
+  "needles": [
+    "pkg/pairs.py",
+    "parse_pairs",
+    "pkg",
+    "pairs",
+    "drops",
+    "final",
+    "comma",
+    "separated"
+  ],
+  "files": [
+    "tests/test_pairs.py",
+    "pkg/pairs.py"
+  ],
+  "snippets": {
+    "tests/test_pairs.py": [
+      "3: from pkg.pairs import parse_pairs",
+      "8:         self.assertEqual(parse_pairs(\"a=1,b=2,c=3\"), {\"a\": \"1\", \"b\": \"2\", \"c\": \"3\"})",
+      "11:         self.assertEqual(parse_pairs(\"only=yes\"), {\"only\": \"yes\"})"
+    ],
+    "pkg/pairs.py": [
+      "1: def parse_pairs(text):",
+      "1: def parse_pairs(text):"
+    ]
+  }
+}

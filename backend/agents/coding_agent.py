@@ -12,7 +12,7 @@ from tools.sandbox_markdown import redact_sandbox_result_dict, redact_image_stdo
 _MAX_PROJECT_CONTEXT_CHARS = 20_000
 _MIN_CTX_FOR_WORKSPACE_PROPOSE = 80
 
-_CODING_GEN_SYSTEM = """You are Ada's coding agent. The user gave a task that should be solved with Python code running in a secure sandbox—not by clicking the desktop.
+_CODING_GEN_SYSTEM = """You are Jarvis's coding agent. The user gave a task that should be solved with Python code running in a secure sandbox—not by clicking the desktop.
 
 **Role vs finance agent:** The finance agent fetches market **data** and short factual/market commentary. **You** run **code**: statistics, transforms, simulations, and **plots**. If they want charts, regressions, correlations, backtests, or custom analysis on prices/returns, do it here with numpy/pandas/matplotlib/yfinance as needed.
 
@@ -156,7 +156,7 @@ def _propose_workspace_file_fences(
     client = mod._client(api_key)
     model = getattr(mod, "CHAT_MODEL", "gpt-4o")
     system = (
-        "You are Ada's **workspace file writer**. The user has a project folder open in the app. You receive a markdown "
+        "You are Jarvis's **workspace file writer**. The user has a project folder open in the app. You receive a markdown "
         "snapshot that lists relative paths and the current contents of many text files (excerpts may be truncated).\n\n"
         "**Job:** Produce the **actual file updates** the user asked for—not suggestions in prose. You must emit the "
         "**complete new text** for every file you change so the app can show a line diff and the user can apply it "

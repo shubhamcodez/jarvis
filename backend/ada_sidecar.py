@@ -9,11 +9,11 @@ from pathlib import Path
 def _platform_data_dir() -> Path:
     if sys.platform == "win32":
         appdata = os.environ.get("APPDATA") or str(Path.home() / "AppData" / "Roaming")
-        return Path(appdata) / "Ada"
+        return Path(appdata) / "Jarvis"
     if sys.platform == "darwin":
-        return Path.home() / "Library" / "Application Support" / "Ada"
+        return Path.home() / "Library" / "Application Support" / "Jarvis"
     xdg = (os.environ.get("XDG_DATA_HOME") or "").strip()
-    return Path(xdg) / "Ada" if xdg else Path.home() / ".local" / "share" / "Ada"
+    return Path(xdg) / "Jarvis" if xdg else Path.home() / ".local" / "share" / "Jarvis"
 
 
 def _prepare_env() -> None:

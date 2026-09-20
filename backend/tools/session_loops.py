@@ -127,7 +127,7 @@ def _fire(item: dict[str, Any]) -> None:
             f"Loop check-in (short status only; do not start an agent plan):\n{prompt}",
             None,
             None,
-            "You are Ada doing a scheduled check-in. Reply in at most 6 lines.",
+            "You are Jarvis doing a scheduled check-in. Reply in at most 6 lines.",
         )
         extra = ""
         low = (prompt or "").lower()

@@ -226,7 +226,7 @@ class TestGitHistory(unittest.TestCase):
                 self.skipTest("git not installed")
             subprocess.run(["git", "init"], cwd=dest, check=True, capture_output=True)
             subprocess.run(["git", "config", "user.email", "ada@test"], cwd=dest, check=True, capture_output=True)
-            subprocess.run(["git", "config", "user.name", "Ada"], cwd=dest, check=True, capture_output=True)
+            subprocess.run(["git", "config", "user.name", "Jarvis"], cwd=dest, check=True, capture_output=True)
             (dest / "mod.py").write_text("x = 1\n", encoding="utf-8")
             subprocess.run(["git", "add", "mod.py"], cwd=dest, check=True, capture_output=True)
             subprocess.run(

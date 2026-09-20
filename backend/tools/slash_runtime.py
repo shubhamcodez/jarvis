@@ -348,7 +348,7 @@ def run_slash(
         return {
             "ok": True,
             "kind": "local",
-            "markdown": f"Goal set: **{extra}**. After each turn Ada runs the critic once against this condition. Use `/loop` to keep checking, or `/goal clear`.",
+            "markdown": f"Goal set: **{extra}**. After each turn Jarvis runs the critic once against this condition. Use `/loop` to keep checking, or `/goal clear`.",
             "reload": True,
         }
     if cmd == "model":
@@ -391,7 +391,7 @@ def run_slash(
         return {
             "ok": True,
             "kind": "notify",
-            "markdown": "Desktop notifications: Ada will alert you when a run finishes or needs approval if this tab is in the background.",
+            "markdown": "Desktop notifications: Jarvis will alert you when a run finishes or needs approval if this tab is in the background.",
         }
     if cmd == "skill":
         token, _, rest = extra.partition(" ")

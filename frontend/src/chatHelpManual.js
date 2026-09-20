@@ -17,7 +17,7 @@ export const CHAT_HELP_MANUAL_MARKDOWN = `
 | \`/diff\` | Git status + unstaged/staged diff of the linked workspace. |
 | \`/review\` | Read-only pass over the current diff (cheap risk flags, no extra model call). |
 | \`/rewind\` [N] | Drop the last reply, or keep the first N messages. Also on the last assistant message. |
-| \`/undo\` | Restore the last workbench edit, else the latest server checkpoint. |
+| \`/undo\` | Restore the latest server checkpoint (same as **Restore checkpoint**). |
 | \`/usage\` / \`/cost\` / \`/stats\` | Token totals for recent traces. |
 | \`/init\` | Write a starter \`AGENTS.md\` if missing (\`/init force\` replaces). |
 | \`/doctor\` | Setup checkup (keys present, workspace, git, skills) — never prints secret values. |
@@ -33,7 +33,7 @@ export const CHAT_HELP_MANUAL_MARKDOWN = `
 | \`/tasks\` or \`/bashes\` | Durable tasks plus in-flight runs. |
 | \`/goal [condition]\` | Pin a done-condition; the critic runs once after each turn (\`/goal clear\`). |
 | Type \`/\` | Autocomplete built-in, workspace, and skill commands. |
-| Apply all / Discard | Bar above chat when Ada proposed file edits — write or drop the whole batch. |
+| Apply all / Discard | Bar above chat when Jarvis proposed file edits — write or drop the whole batch. |
 | \`/plan show\` | Last SWE \`update_plan\` (also kept on the chat and shown as the todo strip). |
 | \`/model [openai\\|xai\\|local]\` | Show or switch the LLM provider. |
 | \`/cd [path]\` | Show or relink the project workspace. |
@@ -49,7 +49,7 @@ Above the composer: **Plan** (no writes), **Draft** (approve every write), **Age
 
 ## Sending messages
 
-- **Enter** — Send. While Ada is working, Enter **queues** the follow-up (does not kill the run).
+- **Enter** — Send. While Jarvis is working, Enter **queues** the follow-up (does not kill the run).
 - **Tab** while a run is active — Queue the composer (Codex-style deferred follow-up).
 - **Hold / Resume** on the queue — Keep follow-ups visible without auto-sending (review first).
 - **Stop** — Abort the current stream. The queue stays unless you remove items.
@@ -57,14 +57,14 @@ Above the composer: **Plan** (no writes), **Draft** (approve every write), **Age
 - **Pin** on a reply — Save it in Activity.
 - Search chats from the Chats menu.
 
-Project rules: if a folder is linked, Ada reads \`ADA.md\`, \`AGENTS.md\`, \`CLAUDE.md\`, or \`.ada/rules.md\`.
+Project rules: if a folder is linked, Jarvis reads \`ADA.md\`, \`AGENTS.md\`, \`CLAUDE.md\`, or \`.ada/rules.md\`.
 Workspace skills: \`SKILL.md\` files under \`.agents/skills/\`, \`.ada/skills/\`, \`.cursor/skills/\`, or \`.claude/skills/\` (names always listed; full playbook loads when relevant).
 Thumbs on a reply store a lightweight signal (👎 also writes a short memory note). Say \`implement #64\` to fetch a GitHub issue via \`gh\`.
 - Use the **+** button to attach files or toggle **Web search** (when on, your message is also used as a search query unless you use the web-search flow from the menu).
 
 ## Models
 
-Settings → **Model** lists OpenAI, xAI, and local open-source weights. Ada detects GPU/NPU memory and suggests a Hugging Face GGUF (or a small transformers model). Download suggested, then pick it in the same menu.
+Settings → **Model** lists OpenAI, xAI, and local open-source weights. Jarvis detects GPU/NPU memory and suggests a Hugging Face GGUF (or a small transformers model). Download suggested, then pick it in the same menu.
 
 ## Chats
 
@@ -72,11 +72,11 @@ Settings → **Model** lists OpenAI, xAI, and local open-source weights. Ada det
 
 ## Custom agents
 
-The **Agents** menu in the navbar lists Ada plus your custom agents. Hover it to switch agents. The **+** button opens a modal — describe the job, and Ada creates the agent (memory, starter skill, tools).
+The **Agents** menu in the navbar lists Jarvis plus your custom agents. Hover it to switch agents. The **+** button opens a modal — describe the job, and Jarvis creates the agent (memory, starter skill, tools).
 
 - **Memory** — \`MEMORY.md\` (say \`remember …\` in chat to append a note)
 - **Skills** — \`SKILL.md\` playbooks (description + steps; matching skills load on a turn)
-- **Tools** — allowlist from Ada’s tool registry
+- **Tools** — allowlist from Jarvis’s tool registry
 - **Knowledge** — uploadable files (small files in context; larger ones searched)
 - **Schedule** — routines that run at a time of day while the backend is up (drafts into the agent’s chat; test run from Configure)
 
@@ -87,8 +87,8 @@ Use **Configure** on an agent to edit those. Hide/pin/duplicate from Profile. Ag
 When coding mode is on and a project folder is linked:
 
 - **Explorer** — Browse project files; open a file to preview it in the **workbench** (center).
-- **@\`path\` mentions** — Type \`@\` to suggest paths; use arrow keys to highlight, **Ctrl+click** to multi-select, **Enter** to insert. Mentioned files are included in context for Ada.
-- **Proposed edits** — When Ada returns file changes, the workbench shows a diff; review, apply, or dismiss. Summary cards above the chat list stats per file; **click a card or a matching file heading** in the reply to jump to that file in the workbench.
+- **@\`path\` mentions** — Type \`@\` to suggest paths; use arrow keys to highlight, **Ctrl+click** to multi-select, **Enter** to insert. Mentioned files are included in context for Jarvis.
+- **Proposed edits** — When Jarvis returns file changes, the workbench shows a diff; review, apply, or dismiss. Summary cards above the chat list stats per file; **click a card or a matching file heading** in the reply to jump to that file in the workbench.
 - **Terminal** — Use the panel below the chat when available for shell commands (depends on your setup).
 
 ## Tips

@@ -1,8 +1,8 @@
 [package]
 name = "ada"
 version = "0.1.0"
-description = "Ada desktop shell"
-authors = ["Ada"]
+description = "Jarvis desktop shell"
+authors = ["Jarvis"]
 edition = "2021"
 
 [lib]

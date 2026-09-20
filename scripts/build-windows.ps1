@@ -12,21 +12,21 @@ Pop-Location
 Write-Host "==> PyInstaller sidecar"
 Push-Location "$Root\backend"
 poetry add --group dev pyinstaller 2>$null
-poetry run pyinstaller --noconfirm ada-backend.spec
+poetry run pyinstaller --noconfirm jarvis-backend.spec
 Pop-Location
 
-$sidecar = Join-Path $Root "backend\dist\ada-backend.exe"
+$sidecar = Join-Path $Root "backend\dist\jarvis-backend.exe"
 if (-not (Test-Path $sidecar)) {
-  throw "PyInstaller did not produce backend/dist/ada-backend.exe"
+  throw "PyInstaller did not produce backend/dist/jarvis-backend.exe"
 }
 $binDir = Join-Path $Root "src-tauri\binaries"
 New-Item -ItemType Directory -Force -Path $binDir | Out-Null
-Copy-Item $sidecar (Join-Path $binDir "ada-backend.exe") -Force
-Write-Host "Sidecar copied to src-tauri/binaries/ada-backend.exe"
+Copy-Item $sidecar (Join-Path $binDir "jarvis-backend.exe") -Force
+Write-Host "Sidecar copied to src-tauri/binaries/jarvis-backend.exe"
 
 Write-Host "==> Frontend + Tauri NSIS"
 npm install
-$env:TAURI_CONFIG = '{"bundle":{"resources":{"binaries/ada-backend.exe":"ada-backend.exe"}}}'
+$env:TAURI_CONFIG = '{"bundle":{"resources":{"binaries/jarvis-backend.exe":"jarvis-backend.exe"}}}'
 npm run tauri:build
 Remove-Item Env:TAURI_CONFIG -ErrorAction SilentlyContinue
 

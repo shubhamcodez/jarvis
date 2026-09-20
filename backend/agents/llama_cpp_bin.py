@@ -173,7 +173,7 @@ def ensure_binary(progress_cb=None) -> Path:
     with httpx.Client(timeout=90.0, follow_redirects=True) as client:
         r = client.get(
             _GH_API,
-            headers={"Accept": "application/vnd.github+json", "User-Agent": "ada-desktop"},
+            headers={"Accept": "application/vnd.github+json", "User-Agent": "jarvis-desktop"},
         )
         r.raise_for_status()
         releases = r.json()
