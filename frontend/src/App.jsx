@@ -820,6 +820,7 @@ function App() {
   const [slashMention, setSlashMention] = useState(null)
   const [slashCatalog, setSlashCatalog] = useState([])
   const slashUiRef = useRef(null)
+  const workspaceClearedRef = useRef(false)
   const [webSearchMode, setWebSearchMode] = useState(() => {
     try {
       return sessionStorage.getItem('jarvis-web-search-mode') === '1' || sessionStorage.getItem('ada-web-search-mode') === '1'
@@ -1381,9 +1382,9 @@ function App() {
     try {
       const ws = await getWorkspaceStatus()
       setWorkspaceDiskPath(ws?.linked ? ws.path || '' : '')
-      if (ws?.linked) {
+      if (ws?.linked && !workspaceClearedRef.current) {
         const listed = await listWorkspaceFiles()
-        if (listed?.ok && Array.isArray(listed.paths) && listed.paths.length) {
+        if (listed?.ok && Array.isArray(listed.paths) && listed.paths.length && !workspaceClearedRef.current) {
           setWorkspaceRelPaths(listed.paths)
           try {
             sessionStorage.setItem('jarvis-workspace-paths', JSON.stringify(listed.paths))
@@ -1572,6 +1573,34 @@ function App() {
     let cancelled = false
     ;(async () => {
       await initApiAuth()
+      if (cancelled) return
+      try {
+        if (!workspaceClearedRef.current) {
+          const ws = await getWorkspaceStatus()
+          if (ws?.linked) {
+            setWorkspaceDiskPath(ws.path || '')
+            const listed = await listWorkspaceFiles()
+            if (!cancelled && listed?.ok && Array.isArray(listed.paths) && listed.paths.length) {
+              setWorkspaceRelPaths(listed.paths)
+              try {
+                sessionStorage.setItem('jarvis-workspace-paths', JSON.stringify(listed.paths))
+              } catch {
+                /* ignore */
+              }
+              if (ws.label) {
+                setWorkspaceLocalLabel((prev) => prev || ws.label)
+                try {
+                  sessionStorage.setItem('jarvis-workspace-local-label', ws.label)
+                } catch {
+                  /* ignore */
+                }
+              }
+            }
+          }
+        }
+      } catch {
+        /* token or sidecar not ready */
+      }
       if (cancelled) return
       refreshChatList()
       refreshCustomAgents()
@@ -2147,35 +2176,56 @@ function App() {
   }
 
   const persistLocalProject = (label, snapshot, relPaths = []) => {
+    workspaceClearedRef.current = false
+    const list = Array.isArray(relPaths) ? relPaths : []
+    setWorkspaceLocalLabel(label)
+    setWorkspaceRelPaths(list)
+    if (snapshot != null) setWorkspaceSnapshot(snapshot)
     try {
       localStorage.removeItem('jarvis-workspace-folder')
       sessionStorage.removeItem('jarvis-workspace-folder')
       sessionStorage.removeItem('jarvis-coding-project-path')
       sessionStorage.removeItem('jarvis-coding-project-mode')
       sessionStorage.setItem('jarvis-workspace-local-label', label)
-      sessionStorage.setItem('jarvis-workspace-snapshot', snapshot)
-      const pathsJson = JSON.stringify(Array.isArray(relPaths) ? relPaths : [])
-      sessionStorage.setItem('jarvis-workspace-paths', pathsJson)
-      setWorkspaceLocalLabel(label)
-      setWorkspaceSnapshot(snapshot)
-      setWorkspaceRelPaths(Array.isArray(relPaths) ? relPaths : [])
+      sessionStorage.setItem('jarvis-workspace-paths', JSON.stringify(list))
+      if (snapshot != null) sessionStorage.setItem('jarvis-workspace-snapshot', snapshot)
     } catch (e) {
       try {
         sessionStorage.removeItem('jarvis-workspace-snapshot')
-        sessionStorage.removeItem('jarvis-workspace-local-label')
-        sessionStorage.removeItem('jarvis-workspace-paths')
       } catch {
         /* ignore */
       }
       if (e?.name === 'QuotaExceededError') {
         alert(
-          'This folder snapshot is too large for browser storage. Try a smaller folder or exclude large generated directories.',
+          'This folder snapshot is too large for browser storage. The file tree is still available; try a smaller folder if chat context looks incomplete.',
         )
       }
     }
   }
 
+  const reloadWorkspaceTree = async () => {
+    if (workspaceClearedRef.current) return
+    setProjectImportBusy(true)
+    try {
+      await initApiAuth()
+      const listed = await listWorkspaceFiles()
+      if (listed?.ok && Array.isArray(listed.paths) && listed.paths.length) {
+        setWorkspaceRelPaths(listed.paths)
+        try {
+          sessionStorage.setItem('jarvis-workspace-paths', JSON.stringify(listed.paths))
+        } catch {
+          /* ignore */
+        }
+      }
+    } catch (e) {
+      alert(e?.message || 'Could not load the file list.')
+    } finally {
+      setProjectImportBusy(false)
+    }
+  }
+
   const clearProjectContext = () => {
+    workspaceClearedRef.current = true
     const label = workspaceLocalLabel.trim()
     if (label) {
       clearPreviewCacheForRoot(label).catch(() => {})
@@ -2224,45 +2274,9 @@ function App() {
     }
   }, [workspaceSnapshot, workspaceLocalLabel, workspaceRelPaths.length])
 
-  useEffect(() => {
-    if (!codingModeEnabled) return
-    if (workspaceRelPaths.length > 0) return
-    let cancelled = false
-    ;(async () => {
-      try {
-        const ws = await getWorkspaceStatus()
-        if (cancelled || !ws?.linked) return
-        setWorkspaceDiskPath(ws.path || '')
-        const listed = await listWorkspaceFiles()
-        if (cancelled || !listed?.ok || !Array.isArray(listed.paths) || !listed.paths.length) return
-        setWorkspaceRelPaths(listed.paths)
-        try {
-          sessionStorage.setItem('jarvis-workspace-paths', JSON.stringify(listed.paths))
-        } catch {
-          /* ignore */
-        }
-        if (ws.label && !workspaceLocalLabel.trim()) {
-          setWorkspaceLocalLabel(ws.label)
-        }
-        if (!workspaceSnapshot.trim()) {
-          const snap = await fetchWorkspaceSnapshot()
-          if (cancelled) return
-          if (snap?.ok) {
-            persistLocalProject(snap.label || ws.label || 'project', snap.snapshot || '', listed.paths)
-            setWorkspaceDiskPath(snap.path || ws.path || '')
-          }
-        }
-      } catch {
-        /* ignore */
-      }
-    })()
-    return () => {
-      cancelled = true
-    }
-  }, [codingModeEnabled, workspaceRelPaths.length, workspaceLocalLabel, workspaceSnapshot])
-
   const pickLocalProjectFolder = async () => {
     if (!codingModeEnabled) return
+    workspaceClearedRef.current = false
     const nativePath = await pickWorkspaceFolderNative()
     if (nativePath) {
       setProjectImportBusy(true)
@@ -2282,10 +2296,8 @@ function App() {
             /* ignore */
           }
         }
-        if (snap?.ok && (snap.snapshot || paths.length)) {
-          persistLocalProject(snap.label || linked.label || 'project', snap.snapshot || '', paths)
-          setWorkspaceDiskPath(snap.path || nativePath)
-        }
+        persistLocalProject(snap?.label || linked.label || 'project', snap?.snapshot || '', paths)
+        setWorkspaceDiskPath(snap?.path || nativePath)
       } catch (e) {
         alert(e?.message || 'Could not open that folder.')
       } finally {
@@ -2313,10 +2325,8 @@ function App() {
             /* ignore */
           }
         }
-        if (snap?.ok && (snap.snapshot || paths.length)) {
-          persistLocalProject(snap.label || linked.label || 'project', snap.snapshot || '', paths)
-          setWorkspaceDiskPath(snap.path || typed.trim())
-        }
+        persistLocalProject(snap?.label || linked.label || 'project', snap?.snapshot || '', paths)
+        setWorkspaceDiskPath(snap?.path || typed.trim())
       } catch (e) {
         alert(e?.message || 'Could not open that folder.')
       } finally {
@@ -3981,7 +3991,7 @@ function App() {
                 {...{ webkitdirectory: true, directory: true, multiple: true }}
               />
               <div className="repo-context-card__body">
-                {!workspaceSnapshot.trim() ? (
+                {!(workspaceSnapshot.trim() || workspaceLocalLabel.trim() || workspaceDiskPath || workspaceRelPaths.length) ? (
                   <div className="repo-context-empty">
                     <p className="repo-context-empty__hint">
                       Choose a folder — Jarvis reads files in your browser and sends an index to the model (no path
@@ -3997,7 +4007,7 @@ function App() {
                     </button>
                   </div>
                 ) : null}
-                {workspaceSnapshot.trim() ? (
+                {workspaceSnapshot.trim() || workspaceLocalLabel.trim() || workspaceDiskPath || workspaceRelPaths.length ? (
                   <div className="repo-context-linked">
                     <div className="repo-context-linked__row" title={workspaceLocalLabel}>
                       <span className="repo-context-linked__icon-wrap" aria-hidden>
@@ -4055,17 +4065,20 @@ function App() {
                     </div>
                     {workspaceRelPaths.length > 0 ? (
                       <ProjectFileTree
-                        rootLabel={workspaceLocalLabel}
+                        rootLabel={workspaceLocalLabel || 'Project'}
                         relPaths={workspaceRelPaths}
                         onFileOpen={openProjectFile}
                         activePath={filePreview?.relPath || ''}
                       />
                     ) : (
-                      <p className="repo-context-tree-empty">
-                        {projectImportBusy
-                          ? 'Reading folder…'
-                          : 'File list not loaded. Re-open the folder to show the explorer.'}
-                      </p>
+                      <div className="repo-context-tree-empty">
+                        <p>{projectImportBusy ? 'Reading folder…' : 'Loading the file tree…'}</p>
+                        {!projectImportBusy ? (
+                          <button type="button" className="repo-context-btn repo-context-btn--ghost" onClick={reloadWorkspaceTree}>
+                            Load files
+                          </button>
+                        ) : null}
+                      </div>
                     )}
                   </div>
                 ) : null}
