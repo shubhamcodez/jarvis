@@ -20,6 +20,11 @@ src-tauri/target/
 
 # Custom agent data (uploads, memory, schedules)
 custom_agents/
+
+# Chat logs (dev data root is the repo)
+chats/
+jarvis-chats-dir.txt
+ada-chats-dir.txt
 venv/
 jarvis-observability/
 ada-observability/
