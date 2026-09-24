@@ -27,7 +27,7 @@ On a Windows build machine:
 powershell -ExecutionPolicy Bypass -File scripts/build-windows.ps1
 ```
 
-Output: `src-tauri/target/release/bundle/nsis/Jarvis_0.1.0_x64-setup.exe`
+Output: `src-tauri/target/release/bundle/nsis/Jarvis_0.0.2_x64-setup.exe`
 
 The installer does **not** require Python, Poetry, or Node. First launch: Settings → paste API keys (stored in `%APPDATA%\Jarvis\.env`).
 

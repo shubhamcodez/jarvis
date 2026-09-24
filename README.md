@@ -6,11 +6,10 @@ This guide is for **version 0.0.2**. You do not need Python, Node, or Rust to us
 
 ## Run the installer
 
-1. Get the setup file. For this release it is `Jarvis_0.0.2_x64-setup.exe`. A build made from the current project stamp may instead be named `Jarvis_0.1.0_x64-setup.exe`. Either file installs the same way.
-2. Double-click it. Windows SmartScreen may say the publisher is unknown because this build is not code-signed. Choose **More info**, then **Run anyway**.
-3. The installer is for the current Windows user. It does not need administrator rights.
-4. If Windows asks to install the **WebView2** runtime, allow it. Jarvis uses it to draw the window.
-5. When setup finishes, open **Jarvis** from the Start menu.
+1. Double-click `Jarvis_0.0.2_x64-setup.exe`. Windows SmartScreen may say the publisher is unknown because this build is not code-signed. Choose **More info**, then **Run anyway**.
+2. The installer is for the current Windows user. It does not need administrator rights.
+3. If Windows asks to install the **WebView2** runtime, allow it. Jarvis uses it to draw the window.
+4. When setup finishes, open **Jarvis** from the Start menu.
 
 Close Jarvis before you install an update. Setup stops the app so it can replace its files. If a file is still locked, restart Windows and run the installer again.
 

@@ -1,6 +1,6 @@
 [package]
 name = "jarvis"
-version = "0.1.0"
+version = "0.0.2"
 description = "Jarvis desktop shell"
 authors = ["Jarvis"]
 edition = "2021"
