@@ -18,8 +18,9 @@ src-tauri/target/
 *.rpm
 *.msi
 
-# Custom agent data (uploads, memory, schedules)
-custom_agents/
+# Custom agent data (uploads, memory, schedules) at the repo root.
+# Source lives in backend/custom_agents/ and must stay tracked.
+/custom_agents/
 
 # Chat logs (dev data root is the repo)
 chats/

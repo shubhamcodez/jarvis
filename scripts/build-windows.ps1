@@ -4,6 +4,11 @@ $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent $PSScriptRoot
 Set-Location $Root
 
+$venvScripts = Join-Path $Root "venv\Scripts"
+if (-not (Get-Command poetry -ErrorAction SilentlyContinue) -and (Test-Path (Join-Path $venvScripts "poetry.exe"))) {
+  $env:Path = "$venvScripts;$env:Path"
+}
+
 Write-Host "==> Poetry deps"
 Push-Location "$Root\backend"
 poetry install --no-interaction --with dev --no-root
@@ -35,7 +40,11 @@ Write-Host "Sidecar copied to src-tauri/binaries/jarvis-backend.exe"
 
 Write-Host "==> Frontend + Tauri NSIS"
 npm install
+if ($LASTEXITCODE -ne 0) { throw "npm install failed with exit code $LASTEXITCODE" }
+npm install --prefix frontend
+if ($LASTEXITCODE -ne 0) { throw "frontend npm install failed with exit code $LASTEXITCODE" }
 npm run tauri:build
+if ($LASTEXITCODE -ne 0) { throw "tauri build failed with exit code $LASTEXITCODE" }
 
 $search = @(
   (Join-Path $Root "src-tauri\target\release\bundle\nsis"),

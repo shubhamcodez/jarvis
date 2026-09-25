@@ -445,6 +445,79 @@ class TestDiscoverTestCommand(unittest.TestCase):
         finally:
             shutil.rmtree(dest, ignore_errors=True)
 
+    def test_unittest_suite_skips_pytest(self):
+        dest = Path(tempfile.mkdtemp(prefix="ada-ut-"))
+        try:
+            (dest / "tests").mkdir()
+            (dest / "tests" / "test_a.py").write_text(
+                "import unittest\n\nclass T(unittest.TestCase):\n    def test_ok(self):\n        self.assertTrue(True)\n",
+                encoding="utf-8",
+            )
+            from tools.diagnostics import discover_test_command
+
+            cmd = discover_test_command(dest)
+            joined = " ".join(cmd)
+            self.assertIn("unittest", joined)
+            self.assertNotIn("pytest", joined)
+            self.assertIn("-t", cmd)
+        finally:
+            shutil.rmtree(dest, ignore_errors=True)
+
+    def test_pytest_style_still_runs(self):
+        dest = Path(tempfile.mkdtemp(prefix="ada-pyt-run-"))
+        try:
+            (dest / "tests").mkdir()
+            (dest / "tests" / "test_a.py").write_text("def test_ok():\n    assert 1 == 1\n", encoding="utf-8")
+            out = score_workspace(dest)
+            self.assertIn("pytest", out.get("command") or "")
+            self.assertTrue(out.get("passed"), out.get("summary"))
+        finally:
+            shutil.rmtree(dest, ignore_errors=True)
+
+
+class TestWarmUnittestRunner(unittest.TestCase):
+    def _copy(self, src: Path, *, gold: bool) -> Path:
+        work = Path(tempfile.mkdtemp(prefix="ada-warm-"))
+        shutil.copytree(src, work, dirs_exist_ok=True, ignore=shutil.ignore_patterns("gold", "__pycache__"))
+        if gold:
+            apply_gold(src, work)
+        return work
+
+    def test_reuses_worker_without_stale_imports(self):
+        item = next(entry for entry in SWE_FIXTURES if entry["id"] == "mean_bias")
+        src = swe_fixture_path(item)
+        trees: list[Path] = []
+        try:
+            buggy = self._copy(src, gold=False)
+            fixed = self._copy(src, gold=True)
+            buggy_again = self._copy(src, gold=False)
+            trees.extend([buggy, fixed, buggy_again])
+            first = score_workspace(buggy)
+            second = score_workspace(fixed)
+            third = score_workspace(buggy_again)
+            self.assertFalse(first.get("passed"), first.get("summary"))
+            self.assertTrue(second.get("passed"), second.get("summary"))
+            self.assertFalse(third.get("passed"), third.get("summary"))
+            self.assertIn("unittest", first.get("command") or "")
+            self.assertIn("ZeroDivisionError", first.get("summary") or "")
+        finally:
+            for tree in trees:
+                shutil.rmtree(tree, ignore_errors=True)
+
+    def test_zero_collected_tests_do_not_pass(self):
+        dest = Path(tempfile.mkdtemp(prefix="ada-empty-"))
+        try:
+            (dest / "tests").mkdir()
+            (dest / "tests" / "test_empty.py").write_text(
+                "import unittest\n\nclass T(unittest.TestCase):\n    pass\n",
+                encoding="utf-8",
+            )
+            out = score_workspace(dest)
+            self.assertFalse(out.get("passed"), out)
+            self.assertIn("No tests ran", out.get("summary") or "")
+        finally:
+            shutil.rmtree(dest, ignore_errors=True)
+
 
 class TestChatPlan(unittest.TestCase):
     def test_set_and_read(self):
